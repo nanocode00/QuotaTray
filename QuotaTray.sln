@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuotaTray.App", "QuotaTray.App\QuotaTray.App.csproj", "{FD25A4EF-9D64-46DC-A26B-165F7F798D40}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuotaTray.Desktop", "QuotaTray.Desktop\QuotaTray.Desktop.csproj", "{C07EA6BD-1D62-4859-9E83-9C5B1E6E3D04}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FD25A4EF-9D64-46DC-A26B-165F7F798D40}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FD25A4EF-9D64-46DC-A26B-165F7F798D40}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FD25A4EF-9D64-46DC-A26B-165F7F798D40}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FD25A4EF-9D64-46DC-A26B-165F7F798D40}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C07EA6BD-1D62-4859-9E83-9C5B1E6E3D04}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C07EA6BD-1D62-4859-9E83-9C5B1E6E3D04}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C07EA6BD-1D62-4859-9E83-9C5B1E6E3D04}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C07EA6BD-1D62-4859-9E83-9C5B1E6E3D04}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

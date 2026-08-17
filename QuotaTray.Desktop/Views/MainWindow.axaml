@@ -1,0 +1,398 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:QuotaTray.Desktop.ViewModels"
+        xmlns:m="using:QuotaTray.Core.Models"
+        x:Class="QuotaTray.Desktop.Views.MainWindow"
+        x:DataType="vm:QuotaViewModel"
+        Title="AI Quota"
+        Width="390"
+        SizeToContent="Height"
+        MaxHeight="520"
+        CanResize="False"
+        SystemDecorations="None"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        WindowStartupLocation="Manual"
+        Deactivated="Window_Deactivated">
+
+    <!-- Main Outer Container with Drop Shadow -->
+    <Border Margin="10" 
+            Background="#16181F" 
+            BorderBrush="#2A2D3A" 
+            BorderThickness="1" 
+            CornerRadius="16" 
+            Padding="16,14"
+            BoxShadow="0 4 20 0 #A0000000">
+        <Grid RowDefinitions="Auto,*,Auto">
+
+            <!-- HEADER -->
+            <Grid Grid.Row="0" Margin="0,0,0,12" ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Vertical">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="AI Quota" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF" Margin="0,0,8,0"/>
+                        <Border Background="#222738" CornerRadius="4" Padding="6,1" VerticalAlignment="Center">
+                            <TextBlock Text="Live" FontSize="10" FontWeight="Medium" Foreground="#818CF8"/>
+                        </Border>
+                    </StackPanel>
+                    <TextBlock Text="실시간 AI 쿼터 모니터링" FontSize="11" Foreground="#64748B" Margin="0,2,0,0"/>
+                </StackPanel>
+
+                <!-- Header Action Buttons (Refresh → Pin → Settings → Minimize → Close) -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 1. Refresh Button -->
+                    <Button Classes="iconButton" 
+                            Click="RefreshButton_Click" 
+                            IsEnabled="{Binding !IsRefreshing}" 
+                            ToolTip.Tip="모든 쿼터 지금 새로고침" 
+                            Margin="0,0,2,0"
+                            Padding="6">
+                        <Path Data="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" 
+                              Fill="#94A3B8" Width="13" Height="13" Stretch="Uniform"/>
+                    </Button>
+
+                    <!-- 2. Pin Button -->
+                    <Button x:Name="PinButton" 
+                            Classes="iconButton" 
+                            Click="PinButton_Click" 
+                            ToolTip.Tip="창 항상 위에 고정" 
+                            Margin="0,0,2,0"
+                            Padding="6">
+                        <Path x:Name="PinIconPath" 
+                              Data="M16 12V4H17V2H7V4H8V12L6 14V16H11V22H13V16H18V14L16 12Z" 
+                              Fill="#94A3B8" Opacity="0.5" Width="13" Height="13" Stretch="Uniform"/>
+                    </Button>
+
+                    <!-- 3. Settings Button -->
+                    <Button Classes="iconButton" 
+                            Click="SettingsButton_Click" 
+                            ToolTip.Tip="환경 설정" 
+                            Margin="0,0,2,0"
+                            Padding="6">
+                        <Path Data="M12 15.5A3.5 3.5 0 0 1 8.5 12A3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5a3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97c0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1c0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3 1.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66Z" 
+                              Fill="#94A3B8" Width="13" Height="13" Stretch="Uniform"/>
+                    </Button>
+
+                    <!-- 4. Minimize / Maximize (Compact / Detail Toggle) -->
+                    <Button Classes="iconButton" 
+                            Click="CompactModeToggle_Click" 
+                            ToolTip.Tip="{Binding CompactModeToggleTooltip}" 
+                            Margin="0,0,2,0"
+                            Padding="6">
+                        <Path Data="{Binding CompactModeIconData}" 
+                              Fill="#94A3B8" Width="13" Height="13" Stretch="Uniform"/>
+                    </Button>
+
+                    <!-- 5. Close Button -->
+                    <Button Classes="iconButton" 
+                            Click="CloseButton_Click" 
+                            ToolTip.Tip="닫기" 
+                            Padding="6">
+                        <Path Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z" 
+                              Fill="#94A3B8" Width="11" Height="11" Stretch="Uniform"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- COMPACT SUMMARY VIEW (WHEN ISCOMPACTMODE == TRUE - DEDICATED 2-ROW CARD) -->
+            <ScrollViewer Grid.Row="1" 
+                          VerticalScrollBarVisibility="Auto" 
+                          HorizontalScrollBarVisibility="Disabled"
+                          IsVisible="{Binding IsCompactMode}">
+                <ItemsControl ItemsSource="{Binding ActiveProviders}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ProviderItemViewModel">
+                            <Border Background="#1C1F2B" 
+                                    BorderBrush="#292F40" 
+                                    BorderThickness="1" 
+                                    CornerRadius="10" 
+                                    Padding="12,10" 
+                                    Margin="0,0,0,8">
+                                <Grid RowDefinitions="Auto,Auto">
+                                    <!-- ROW 1: Icon | Provider + Plan | Right-Aligned Quota/Balance -->
+                                    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,7" VerticalAlignment="Center">
+                                        <!-- Left: Icon -->
+                                        <Border Grid.Column="0" Width="22" Height="22" Background="#161922" BorderBrush="#2A3042" BorderThickness="1" CornerRadius="6" Margin="0,0,8,0" VerticalAlignment="Center" ClipToBounds="True">
+                                            <Panel>
+                                                <Image Source="{Binding IconImage}" Width="14" Height="14" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       IsVisible="{Binding IconImage, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                                                <Path Data="{Binding IconSvgData}" Fill="{Binding IconColor}" Width="11" Height="11" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsVisible="{Binding IconImage, Converter={x:Static ObjectConverters.IsNull}}"/>
+                                            </Panel>
+                                        </Border>
+
+                                        <!-- Center: Provider Title + Plan Badge -->
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
+                                            <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" Foreground="#F1F5F9" VerticalAlignment="Center" Margin="0,0,6,0" TextTrimming="CharacterEllipsis"/>
+                                            <Border Background="#262D3D" CornerRadius="4" Padding="5,1" VerticalAlignment="Center" IsVisible="{Binding PlanType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                <TextBlock Text="{Binding PlanType}" FontSize="9" FontWeight="SemiBold" Foreground="#94A3B8"/>
+                                            </Border>
+                                        </StackPanel>
+
+                                        <!-- Right: Primary Quota Text (e.g. 2% left, 51% left, $10.00) -->
+                                        <TextBlock Grid.Column="2" 
+                                                   Text="{Binding PrimaryRemainingPercentText}" 
+                                                   FontSize="13" 
+                                                   FontWeight="Bold" 
+                                                   Foreground="{Binding RemainingBrush}" 
+                                                   VerticalAlignment="Center" 
+                                                   HorizontalAlignment="Right"/>
+                                    </Grid>
+
+                                    <!-- ROW 2: Quota Name | Progress Bar | Reset / Meta (Strict Column Alignment & No Clipping) -->
+                                    <Grid Grid.Row="1" ColumnDefinitions="46,*,Auto" VerticalAlignment="Center">
+                                        <!-- Column 0: Quota Window Name (Fixed width: 46px) -->
+                                        <TextBlock Grid.Column="0" 
+                                                   Text="{Binding PrimaryWindowName}" 
+                                                   FontSize="11" 
+                                                   FontWeight="Medium" 
+                                                   Foreground="#64748B" 
+                                                   VerticalAlignment="Center" 
+                                                   TextTrimming="CharacterEllipsis"/>
+
+                                        <!-- Column 1: Progress Bar (Starts at exact same pixel across all cards) -->
+                                        <ProgressBar Grid.Column="1" 
+                                                     Classes="modern" 
+                                                     Height="6" 
+                                                     Value="{Binding PrimaryRemainingPercent}" 
+                                                     Maximum="100" 
+                                                     Foreground="{Binding PrimaryRemainingPercent, Converter={StaticResource PercentToBrushConverter}}" 
+                                                     VerticalAlignment="Center" 
+                                                     Margin="8,0,10,0"/>
+
+                                        <!-- Column 2: Reset / Meta Text (Auto width, right-aligned, never clipped) -->
+                                        <TextBlock Grid.Column="2" 
+                                                   Text="{Binding CompactMetaText}" 
+                                                   FontSize="10.5" 
+                                                   Foreground="#64748B" 
+                                                   VerticalAlignment="Center" 
+                                                   HorizontalAlignment="Right"
+                                                   TextAlignment="Right"
+                                                   IsVisible="{Binding CompactMetaText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- DETAILED PROVIDERS CARDS (WHEN ISCOMPACTMODE == FALSE) -->
+            <ScrollViewer Grid.Row="1" 
+                          VerticalScrollBarVisibility="Auto" 
+                          HorizontalScrollBarVisibility="Disabled"
+                          IsVisible="{Binding IsDetailedMode}">
+                <ItemsControl ItemsSource="{Binding ActiveProviders}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ProviderItemViewModel">
+                            <Border Background="#1E212B" 
+                                    BorderBrush="#2D3242" 
+                                    BorderThickness="1" 
+                                    CornerRadius="12" 
+                                    Padding="14,12" 
+                                    Margin="0,0,0,10">
+                                <Grid RowDefinitions="Auto,Auto">
+
+                                    <!-- Card Header -->
+                                    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto">
+                                        <!-- Official Brand Asset Icon Badge (Unified Dark Chip) -->
+                                        <Border Grid.Column="0" Width="32" Height="32" Background="#161922" BorderBrush="#2A3042" BorderThickness="1" CornerRadius="8" Margin="0,0,10,0" VerticalAlignment="Center" ClipToBounds="True">
+                                            <Panel>
+                                                <Image Source="{Binding IconImage}" 
+                                                       Width="20" 
+                                                       Height="20" 
+                                                       Stretch="Uniform" 
+                                                       HorizontalAlignment="Center" 
+                                                       VerticalAlignment="Center"
+                                                       IsVisible="{Binding IconImage, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                                                <Path Data="{Binding IconSvgData}" 
+                                                      Fill="{Binding IconColor}" 
+                                                      Width="16" 
+                                                      Height="16" 
+                                                      Stretch="Uniform" 
+                                                      HorizontalAlignment="Center" 
+                                                      VerticalAlignment="Center"
+                                                      IsVisible="{Binding IconImage, Converter={x:Static ObjectConverters.IsNull}}"/>
+                                            </Panel>
+                                        </Border>
+
+                                        <!-- Title & Subtitle / Plan -->
+                                        <Grid Grid.Column="1" Margin="0,0,8,0" RowDefinitions="Auto,Auto">
+                                            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto">
+                                                <TextBlock Grid.Column="0" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" Foreground="#F8FAFC" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                <Border Grid.Column="1" Background="#2A3042" CornerRadius="4" Padding="5,1" VerticalAlignment="Center" MaxWidth="100" IsVisible="{Binding PlanType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                    <TextBlock Text="{Binding PlanType}" FontSize="10" FontWeight="Medium" Foreground="#94A3B8" TextTrimming="CharacterEllipsis"/>
+                                                </Border>
+                                            </Grid>
+                                            <TextBlock Grid.Row="1" Text="{Binding DetailsSubtitle}" FontSize="11" Foreground="#64748B" Margin="0,1,0,0" TextTrimming="CharacterEllipsis" IsVisible="{Binding DetailsSubtitle, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                        </Grid>
+
+                                        <!-- Remaining % Chip or Balance Chip -->
+                                        <Border Grid.Column="2" 
+                                                Background="{Binding RemainingBgBrush}" 
+                                                CornerRadius="6" 
+                                                Padding="8,3" 
+                                                VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding PrimaryRemainingPercentText}" 
+                                                       FontWeight="Bold" 
+                                                       FontSize="13" 
+                                                       Foreground="{Binding RemainingBrush}"/>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- Card Body -->
+                                    <StackPanel Grid.Row="1" Margin="0,10,0,0">
+
+                                        <!-- Multi-Group Pools (Antigravity & Copilot) -->
+                                        <ItemsControl ItemsSource="{Binding Groups}" IsVisible="{Binding HasGroups}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:QuotaGroupViewModel">
+                                                    <Border Background="#141622" 
+                                                            BorderBrush="#252A3C" 
+                                                            BorderThickness="1" 
+                                                            CornerRadius="10" 
+                                                            Padding="12,10" 
+                                                            Margin="0,3,0,7">
+                                                        <StackPanel Orientation="Vertical">
+                                                            <!-- Group Header -->
+                                                            <Grid Margin="0,0,0,6" ColumnDefinitions="*,Auto">
+                                                                <TextBlock Grid.Column="0" Text="{Binding GroupName}" FontSize="12" FontWeight="SemiBold" Foreground="#E2E8F0" VerticalAlignment="Center"/>
+                                                                <Border Grid.Column="1" Background="#202538" CornerRadius="5" Padding="6,2" VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding PrimaryRemainingPercentText}" FontSize="11" FontWeight="Bold" Foreground="#10B981"/>
+                                                                </Border>
+                                                            </Grid>
+
+                                                            <!-- Progress Bars for 5h and Weekly -->
+                                                            <ItemsControl ItemsSource="{Binding Windows}">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate x:DataType="m:QuotaWindow">
+                                                                        <StackPanel Margin="0,2,0,5">
+                                                                            <Grid Margin="0,0,0,3">
+                                                                                <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Medium" Foreground="#94A3B8"/>
+                                                                                <TextBlock Text="{Binding FormattedResetIn}" FontSize="10" Foreground="#64748B" HorizontalAlignment="Right"/>
+                                                                            </Grid>
+                                                                            <ProgressBar Classes="modern" 
+                                                                                         Height="5" 
+                                                                                         Value="{Binding RemainingPercent}" 
+                                                                                         Maximum="100" 
+                                                                                         Foreground="{Binding RemainingPercent, Converter={StaticResource PercentToBrushConverter}}"/>
+                                                                        </StackPanel>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+
+                                                            <!-- Expandable Model List Toggle Button -->
+                                                            <Button Classes="iconButton" 
+                                                                    Click="ToggleGroupModels_Click" 
+                                                                    HorizontalAlignment="Left" 
+                                                                    Margin="0,2,0,0" 
+                                                                    Padding="0">
+                                                                <TextBlock Text="{Binding ToggleText}" FontSize="11" Foreground="#818CF8"/>
+                                                            </Button>
+
+                                                            <!-- Expanded Models List (Clean Tags WrapPanel) -->
+                                                            <Border Background="#1A1D2B" 
+                                                                    CornerRadius="6" 
+                                                                    Padding="8,6" 
+                                                                    Margin="0,6,0,0" 
+                                                                    IsVisible="{Binding IsExpanded}">
+                                                                <ItemsControl ItemsSource="{Binding Models}">
+                                                                    <ItemsControl.ItemsPanel>
+                                                                        <ItemsPanelTemplate>
+                                                                            <WrapPanel Orientation="Horizontal"/>
+                                                                        </ItemsPanelTemplate>
+                                                                    </ItemsControl.ItemsPanel>
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="x:String">
+                                                                            <Border Background="#242838" 
+                                                                                    CornerRadius="4" 
+                                                                                    Padding="6,2" 
+                                                                                    Margin="2,2">
+                                                                                <TextBlock Text="{Binding}" FontSize="10" Foreground="#CBD5E1"/>
+                                                                            </Border>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <!-- Standard Single-Group Windows (Codex / Claude / OpenRouter) -->
+                                        <ItemsControl ItemsSource="{Binding Windows}" IsVisible="{Binding HasWindows}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="m:QuotaWindow">
+                                                    <StackPanel Margin="0,3,0,5">
+                                                        <Grid Margin="0,0,0,4">
+                                                            <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Medium" Foreground="#94A3B8"/>
+                                                            <TextBlock Text="{Binding FormattedResetIn}" 
+                                                                       FontSize="11" 
+                                                                       Foreground="#64748B" 
+                                                                       HorizontalAlignment="Right"/>
+                                                        </Grid>
+                                                        <ProgressBar Classes="modern" 
+                                                                     Value="{Binding RemainingPercent}" 
+                                                                     Maximum="100" 
+                                                                     Foreground="{Binding RemainingPercent, Converter={StaticResource PercentToBrushConverter}}"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <!-- Unauthenticated / Missing Auth State -->
+                                        <StackPanel Orientation="Vertical" IsVisible="{Binding IsAuthMissing}">
+                                            <TextBlock Text="{Binding ErrorMessage}" 
+                                                       FontSize="11" 
+                                                       Foreground="#F59E0B" 
+                                                       TextWrapping="Wrap" 
+                                                       Margin="0,0,0,6"/>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Classes="pillButton" 
+                                                        Click="CardAuthSettings_Click" 
+                                                        Margin="0,0,6,0">
+                                                    <TextBlock Text="API Key 설정" FontSize="11"/>
+                                                </Button>
+                                                <Button Classes="pillButton" 
+                                                        Click="CardCliLogin_Click" 
+                                                        IsVisible="{Binding HasCliLoginCommand}">
+                                                    <TextBlock Text="CLI 로그인" FontSize="11"/>
+                                                </Button>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <!-- General Error State (non-auth) -->
+                                        <TextBlock Text="{Binding ErrorMessage}" 
+                                                   FontSize="11" 
+                                                   Foreground="#EF4444" 
+                                                   TextWrapping="Wrap" 
+                                                   IsVisible="{Binding !IsSuccess}">
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- FOOTER -->
+            <Grid Grid.Row="2" Margin="0,6,0,0" ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" 
+                           Text="{Binding StatusMessage}" 
+                           FontSize="11" 
+                           Foreground="#64748B" 
+                           VerticalAlignment="Center"/>
+
+                <Button Grid.Column="1" 
+                        Classes="iconButton" 
+                        Click="RefreshButton_Click" 
+                        IsVisible="{Binding IsRefreshFailed}" 
+                        Padding="4,1">
+                    <TextBlock Text="다시 시도" FontSize="11" FontWeight="Medium" Foreground="#EF4444"/>
+                </Button>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

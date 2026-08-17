@@ -1,0 +1,83 @@
+name: Release QuotaTray
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build & Package (${{ matrix.target.os }})
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      matrix:
+        target:
+          - os: win-x64
+            runner: windows-latest
+            artifact_name: QuotaTray-windows-x64.zip
+            binary_name: QuotaTray.Desktop.exe
+          - os: linux-x64
+            runner: ubuntu-latest
+            artifact_name: QuotaTray-linux-x64.tar.gz
+            binary_name: QuotaTray.Desktop
+          - os: osx-arm64
+            runner: macos-latest
+            artifact_name: QuotaTray-macos-arm64.tar.gz
+            binary_name: QuotaTray.Desktop
+          - os: osx-x64
+            runner: macos-13
+            artifact_name: QuotaTray-macos-x64.tar.gz
+            binary_name: QuotaTray.Desktop
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Single-File Executable
+        run: |
+          dotnet publish QuotaTray.Desktop/QuotaTray.Desktop.csproj -c Release -r ${{ matrix.target.os }} --self-contained true -p:PublishSingleFile=true -o ./out
+
+      - name: Package Windows Zip
+        if: runner.os == 'Windows'
+        run: |
+          Compress-Archive -Path ./out/* -DestinationPath ./${{ matrix.target.artifact_name }}
+
+      - name: Package Unix Tarball
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x ./out/${{ matrix.target.binary_name }}
+          tar -czf ./${{ matrix.target.artifact_name }} -C ./out .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target.artifact_name }}
+          path: ./${{ matrix.target.artifact_name }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./artifacts/**/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

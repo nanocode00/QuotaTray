@@ -1,0 +1,88 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="clr-namespace:QuotaTray.Desktop.Converters"
+             x:Class="QuotaTray.Desktop.App"
+             RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <converters:PercentToBrushConverter x:Key="PercentToBrushConverter" />
+        <converters:PercentToBackgroundBrushConverter x:Key="PercentToBgConverter" />
+    </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme />
+
+        <!-- Modern Dark Slim ScrollBar Style -->
+        <Style Selector="ScrollBar:vertical">
+            <Setter Property="Width" Value="5"/>
+            <Setter Property="MinWidth" Value="5"/>
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb">
+            <Setter Property="Background" Value="#33384B"/>
+            <Setter Property="CornerRadius" Value="2.5"/>
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb:pointerover">
+            <Setter Property="Background" Value="#4B5563"/>
+        </Style>
+
+        <!-- IconButton Style -->
+        <Style Selector="Button.iconButton">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#94A3B8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="Button.iconButton:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2D313E"/>
+            <Setter Property="Foreground" Value="#F1F5F9"/>
+        </Style>
+
+        <!-- Pill Button Style -->
+        <Style Selector="Button.pillButton">
+            <Setter Property="Background" Value="#2D3346"/>
+            <Setter Property="Foreground" Value="#F8FAFC"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="Button.pillButton:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#3D455D"/>
+        </Style>
+        <Style Selector="Button.pillButton:disabled /template/ ContentPresenter">
+            <Setter Property="Opacity" Value="0.4"/>
+        </Style>
+
+        <!-- ProgressBar Style -->
+        <Style Selector="ProgressBar.modern">
+            <Setter Property="Height" Value="7"/>
+            <Setter Property="Background" Value="#2D313E"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="CornerRadius" Value="3.5"/>
+        </Style>
+        <Style Selector="ProgressBar.modern /template/ Border#PART_Indicator">
+            <Setter Property="CornerRadius" Value="3.5"/>
+        </Style>
+    </Application.Styles>
+
+    <TrayIcon.Icons>
+        <TrayIcons>
+            <TrayIcon ToolTipText="AI Quota"
+                      Clicked="TrayIcon_Clicked">
+                <TrayIcon.Menu>
+                    <NativeMenu>
+                        <NativeMenuItem Header="쿼터 창 열기" Click="OnOpenWindowClicked" />
+                        <NativeMenuItem Header="지금 새로고침" Click="OnRefreshClicked" />
+                        <NativeMenuItem Header="환경 설정..." Click="OnSettingsClicked" />
+                        <NativeMenuItem Header="진단 정보 복사" Click="OnCopyDiagnosticsClicked" />
+                        <NativeMenuItemSeparator />
+                        <NativeMenuItem Header="종료" Click="OnExitClicked" />
+                    </NativeMenu>
+                </TrayIcon.Menu>
+            </TrayIcon>
+        </TrayIcons>
+    </TrayIcon.Icons>
+</Application>

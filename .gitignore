@@ -1,0 +1,34 @@
+## .NET / C# Build Artifacts
+[Bb]in/
+[Oo]bj/
+publish/
+[Rr]elease/
+[Dd]ebug/
+
+## Visual Studio / VS Code / Rider
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+## OS Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+
+## Logs & Temp
+*.log
+*.tmp
+*.temp
+*.cache
+
+## Local App Data / SQLite Cache
+*.db-shm
+*.db-wal
+appsettings.local.json
+credentials.local.json
