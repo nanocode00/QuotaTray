@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -7,10 +8,15 @@ namespace QuotaTray.TestCli;
 internal static class CanonicalAntigravityOAuthBootstrap
 {
     // Public installed-app client ID used consistently by current Antigravity integrations.
-    // The client secret is intentionally NOT stored in this repository; the probe reads it
-    // from the user's installed Antigravity artifacts at runtime.
     private const string CanonicalClientId =
         "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+
+    // SHA-256 fingerprint of the public installed-app client secret used by the
+    // current Antigravity integrations we checked. The secret itself is never
+    // committed or printed; the probe only accepts a local candidate whose
+    // fingerprint matches this value.
+    private const string CanonicalClientSecretSha256 =
+        "1d2f041093fd95aa8995a038c711d50a7960da09a505381c09a745d6ad0ecc60";
 
     private static readonly Regex ClientSecretRegex = new(
         @"GOCSPX-[0-9A-Za-z_-]{20,64}",
@@ -44,12 +50,12 @@ internal static class CanonicalAntigravityOAuthBootstrap
 
             Environment.SetEnvironmentVariable("ANTIGRAVITY_CLIENT_ID", CanonicalClientId);
             Environment.SetEnvironmentVariable("ANTIGRAVITY_CLIENT_SECRET", clientSecret);
-            Console.WriteLine($"PoC bootstrap: canonical Antigravity OAuth client found in {artifact}");
-            Console.WriteLine("PoC bootstrap: client secret stays local and is never printed or committed.");
+            Console.WriteLine($"PoC bootstrap: exact canonical Antigravity OAuth client found in {artifact}");
+            Console.WriteLine("PoC bootstrap: client secret matched by SHA-256 fingerprint; value is never printed or committed.");
             return;
         }
 
-        Console.WriteLine("PoC bootstrap: canonical Antigravity OAuth client was not found in the known local install artifacts.");
+        Console.WriteLine("PoC bootstrap: exact canonical Antigravity OAuth pair was not found in the known local install artifacts.");
     }
 
     private static bool TryFindCanonicalPair(string path, out string? clientSecret)
@@ -63,29 +69,25 @@ internal static class CanonicalAntigravityOAuthBootstrap
             foreach (Encoding encoding in new[] { Encoding.Latin1, Encoding.Unicode })
             {
                 string text = encoding.GetString(bytes);
-                int clientIndex = text.IndexOf(CanonicalClientId, StringComparison.Ordinal);
-                if (clientIndex < 0)
+                if (!text.Contains(CanonicalClientId, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                MatchCollection secretMatches = ClientSecretRegex.Matches(text);
-                if (secretMatches.Count == 0)
+                foreach (Match match in ClientSecretRegex.Matches(text))
                 {
-                    continue;
+                    string fingerprint = Convert.ToHexString(
+                            SHA256.HashData(Encoding.UTF8.GetBytes(match.Value)))
+                        .ToLowerInvariant();
+
+                    if (!fingerprint.Equals(CanonicalClientSecretSha256, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    clientSecret = match.Value;
+                    return true;
                 }
-
-                // Public implementations use one canonical Antigravity installed-app
-                // client pair. If a bundle contains several Google clients, choose the
-                // secret closest to that canonical client ID instead of creating a
-                // cartesian product of unrelated IDs and secrets.
-                Match nearest = secretMatches
-                    .Cast<Match>()
-                    .OrderBy(match => Math.Abs((long)match.Index - clientIndex))
-                    .First();
-
-                clientSecret = nearest.Value;
-                return true;
             }
         }
         catch
@@ -131,8 +133,6 @@ internal static class CanonicalAntigravityOAuthBootstrap
                 AddElectronArtifacts(candidates, directory);
             }
 
-            // agy is kept as a fallback candidate, but only the canonical client ID
-            // is accepted. This avoids pairing unrelated Google OAuth strings.
             candidates.Add(Path.Combine(localAppData, "agy", "bin", "agy.exe"));
             candidates.Add(Path.Combine(userProfile, ".gemini", "antigravity-cli", "bin", "agy.exe"));
         }
