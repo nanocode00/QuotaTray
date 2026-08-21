@@ -49,6 +49,20 @@
   * 트레이 아이콘 동적 게이지 및 색상(초록/주황/빨강) 변화.
   * 쿼터 부족 알림 및 충전 완료(`🎉 100% 충전 완료`) Toast 알림.
 
+### 🔐 Antigravity 인증 동작
+
+Antigravity/agy에서 한 번 정상 로그인해 로컬 OAuth 세션이 생성되면, 이후 QuotaTray는 `agy` 프로세스가 꺼져 있어도 직접 access token을 갱신해 쿼터를 조회할 수 있습니다.
+
+일반 사용자는 Antigravity OAuth 환경변수를 별도로 설정할 필요가 없습니다. QuotaTray는 공개 installed-app OAuth client 메타데이터를 자동으로 확인하고 SHA-256 fingerprint로 검증한 뒤 QuotaTray 전용 credential cache에 저장합니다. Antigravity가 소유한 `gemini:antigravity` credential은 덮어쓰지 않습니다.
+
+문제 진단 시 다음 명령으로 직접 refresh 경로를 검증할 수 있습니다.
+
+```powershell
+dotnet run --project .\QuotaTray.TestCli -- refresh-test
+```
+
+자세한 흐름은 `docs/antigravity-oauth-runtime.md`를 참고하세요.
+
 ---
 
 ### 📥 다운로드 및 실행
