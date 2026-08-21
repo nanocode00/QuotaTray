@@ -11,10 +11,16 @@ internal static class CanonicalAntigravityOAuthBootstrap
     private const string CanonicalClientId =
         "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 
+    // Pinned public reference used only by the forced diagnostic probe. The client
+    // secret is fetched from this immutable public source at runtime rather than
+    // committed to QuotaTray. Production code must not depend on this URL.
+    private const string PinnedPublicReferenceUrl =
+        "https://raw.githubusercontent.com/cortexkit/antigravity-auth/8efa48ba3d7f2d6f97e0a390fc56e0588c4d6f73/packages/core/src/constants.ts";
+
     // SHA-256 fingerprint of the public installed-app client secret used by the
     // current Antigravity integrations we checked. The secret itself is never
-    // committed or printed; the probe only accepts a local candidate whose
-    // fingerprint matches this value.
+    // committed or printed; the probe only accepts a candidate whose fingerprint
+    // matches this value.
     private const string CanonicalClientSecretSha256 =
         "1d2f041093fd95aa8995a038c711d50a7960da09a505381c09a745d6ad0ecc60";
 
@@ -48,14 +54,69 @@ internal static class CanonicalAntigravityOAuthBootstrap
                 continue;
             }
 
-            Environment.SetEnvironmentVariable("ANTIGRAVITY_CLIENT_ID", CanonicalClientId);
-            Environment.SetEnvironmentVariable("ANTIGRAVITY_CLIENT_SECRET", clientSecret);
+            ApplyCanonicalPair(clientSecret!);
             Console.WriteLine($"PoC bootstrap: exact canonical Antigravity OAuth client found in {artifact}");
             Console.WriteLine("PoC bootstrap: client secret matched by SHA-256 fingerprint; value is never printed or committed.");
             return;
         }
 
         Console.WriteLine("PoC bootstrap: exact canonical Antigravity OAuth pair was not found in the known local install artifacts.");
+        Console.WriteLine("PoC bootstrap: trying a pinned public Antigravity integration reference for this diagnostic only...");
+
+        if (TryLoadCanonicalPairFromPinnedPublicReference(out string? publicClientSecret, out string? publicError))
+        {
+            ApplyCanonicalPair(publicClientSecret!);
+            Console.WriteLine("PoC bootstrap: canonical OAuth pair loaded from the pinned public reference.");
+            Console.WriteLine("PoC bootstrap: the secret value is never printed or committed to QuotaTray.");
+            return;
+        }
+
+        Console.WriteLine($"PoC bootstrap: public-reference fallback unavailable: {publicError ?? "unknown error"}");
+    }
+
+    private static void ApplyCanonicalPair(string clientSecret)
+    {
+        Environment.SetEnvironmentVariable("ANTIGRAVITY_CLIENT_ID", CanonicalClientId);
+        Environment.SetEnvironmentVariable("ANTIGRAVITY_CLIENT_SECRET", clientSecret);
+    }
+
+    private static bool TryLoadCanonicalPairFromPinnedPublicReference(
+        out string? clientSecret,
+        out string? error)
+    {
+        clientSecret = null;
+        error = null;
+
+        try
+        {
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            string source = httpClient.GetStringAsync(PinnedPublicReferenceUrl).GetAwaiter().GetResult();
+
+            if (!source.Contains(CanonicalClientId, StringComparison.Ordinal))
+            {
+                error = "pinned reference does not contain the expected client ID";
+                return false;
+            }
+
+            foreach (Match match in ClientSecretRegex.Matches(source))
+            {
+                if (!MatchesCanonicalSecretFingerprint(match.Value))
+                {
+                    continue;
+                }
+
+                clientSecret = match.Value;
+                return true;
+            }
+
+            error = "pinned reference did not contain the expected client-secret fingerprint";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 
     private static bool TryFindCanonicalPair(string path, out string? clientSecret)
@@ -76,11 +137,7 @@ internal static class CanonicalAntigravityOAuthBootstrap
 
                 foreach (Match match in ClientSecretRegex.Matches(text))
                 {
-                    string fingerprint = Convert.ToHexString(
-                            SHA256.HashData(Encoding.UTF8.GetBytes(match.Value)))
-                        .ToLowerInvariant();
-
-                    if (!fingerprint.Equals(CanonicalClientSecretSha256, StringComparison.Ordinal))
+                    if (!MatchesCanonicalSecretFingerprint(match.Value))
                     {
                         continue;
                     }
@@ -96,6 +153,15 @@ internal static class CanonicalAntigravityOAuthBootstrap
         }
 
         return false;
+    }
+
+    private static bool MatchesCanonicalSecretFingerprint(string candidate)
+    {
+        string fingerprint = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(candidate)))
+            .ToLowerInvariant();
+
+        return fingerprint.Equals(CanonicalClientSecretSha256, StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> GetCandidateArtifacts()
