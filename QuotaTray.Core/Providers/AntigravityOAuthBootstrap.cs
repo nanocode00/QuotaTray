@@ -37,7 +37,9 @@ internal static class AntigravityOAuthBootstrap
         @"GOCSPX-[0-9A-Za-z_-]{20,64}",
         RegexOptions.Compiled);
 
+#pragma warning disable CA2255 // Intentional process-start bootstrap for QuotaTray.Core OAuth compatibility.
     [ModuleInitializer]
+#pragma warning restore CA2255
     internal static void Initialize()
     {
         try
