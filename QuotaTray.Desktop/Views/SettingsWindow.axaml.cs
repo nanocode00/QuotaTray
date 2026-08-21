@@ -174,11 +174,16 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        e.Cancel = true;
-        Hide();
-        if (Application.Current is App app)
+        // Only intercept user-initiated close (X button / Alt+F4) to hide to tray.
+        // Allow explicit app shutdown and OS shutdown/logoff to proceed.
+        if (e.CloseReason == WindowCloseReason.WindowClosing)
         {
-            app.ShowMainWindow();
+            e.Cancel = true;
+            Hide();
+            if (Application.Current is App app)
+            {
+                app.ShowMainWindow();
+            }
         }
     }
 }
