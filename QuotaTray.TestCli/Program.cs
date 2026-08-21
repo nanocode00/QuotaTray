@@ -17,6 +17,18 @@ class Program
             return;
         }
 
+        if (args.Length > 0 && args[0].Equals("copilot", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("GitHub Copilot provider probe");
+            Console.WriteLine("This uses QuotaTray's normal credential discovery and provider path. Tokens are never printed.");
+            Console.WriteLine();
+
+            var copilotProvider = new CopilotQuotaProvider();
+            ProviderQuotaResult copilotResult = await copilotProvider.FetchQuotaAsync();
+            PrintResult(copilotResult);
+            return;
+        }
+
         var provider = new AntigravityQuotaProvider();
         ProviderQuotaResult res = await provider.FetchQuotaAsync();
         PrintResult(res);
