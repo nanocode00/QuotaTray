@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using QuotaTray.Core.Models;
 using QuotaTray.Core.Providers;
 
 namespace QuotaTray.TestCli;
@@ -17,7 +18,7 @@ class Program
         }
 
         var provider = new AntigravityQuotaProvider();
-        var res = await provider.FetchQuotaAsync();
+        ProviderQuotaResult res = await provider.FetchQuotaAsync();
         PrintResult(res);
     }
 
@@ -70,7 +71,7 @@ class Program
         Console.WriteLine("Direct OAuth refresh: OK");
         Console.WriteLine("Now querying quota with the refreshed in-memory access token...");
 
-        var result = await provider.FetchQuotaAsync();
+        ProviderQuotaResult result = await provider.FetchQuotaAsync();
         PrintResult(result);
 
         if (result.IsSuccess)
@@ -86,7 +87,7 @@ class Program
         }
     }
 
-    private static void PrintResult(dynamic res)
+    private static void PrintResult(ProviderQuotaResult res)
     {
         Console.WriteLine($"IsSuccess: {res.IsSuccess}");
         Console.WriteLine($"AuthStatus: {res.AuthStatus}");
