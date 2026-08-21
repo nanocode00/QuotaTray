@@ -25,7 +25,6 @@ public class CopilotQuotaProvider : IQuotaProvider
     public bool RequiresApiKey => false;
 
     private const string InternalUsageUrl = "https://api.github.com/copilot_internal/user";
-    private const string CopilotModelsUrl = "https://api.githubcopilot.com/models";
     private readonly HttpClient _httpClient;
     private string? _customApiKey;
 
@@ -66,246 +65,111 @@ public class CopilotQuotaProvider : IQuotaProvider
                 return result;
             }
 
-            // Step 1: Attempt copilot_internal/user for fine-grained snapshots
-            QuotaWindow? completionsWindow = null;
-            QuotaWindow? chatWindow = null;
-            QuotaWindow? premiumWindow = null;
-            bool isFreePlan = true; // Default for public personal tokens unless verified paid
+            using var request = new HttpRequestMessage(HttpMethod.Get, InternalUsageUrl);
+            request.Headers.Add("Authorization", $"Bearer {token}");
+            request.Headers.Add("Accept", "application/json");
+            request.Headers.TryAddWithoutValidation("User-Agent", "QuotaTray/1.0");
+            request.Headers.TryAddWithoutValidation("Editor-Version", "vscode/1.96.0");
 
-            try
+            using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
             {
-                using var reqInternal = new HttpRequestMessage(HttpMethod.Get, InternalUsageUrl);
-                reqInternal.Headers.Add("Authorization", $"Bearer {token}");
-                reqInternal.Headers.Add("Accept", "application/json");
-                reqInternal.Headers.TryAddWithoutValidation("User-Agent", "QuotaTray/1.0");
-                reqInternal.Headers.TryAddWithoutValidation("Editor-Version", "vscode/1.96.0");
-
-                var respInternal = await _httpClient.SendAsync(reqInternal, cancellationToken);
-                if (respInternal.IsSuccessStatusCode)
-                {
-                    string json = await respInternal.Content.ReadAsStringAsync(cancellationToken);
-                    using var doc = JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-
-                    if (root.TryGetProperty("login", out var loginProp)) result.AccountEmail = loginProp.GetString();
-                    if (root.TryGetProperty("copilot_plan", out var planProp))
-                    {
-                        string? planStr = planProp.GetString();
-                        if (!string.IsNullOrEmpty(planStr))
-                        {
-                            if (planStr.Contains("free", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isFreePlan = true;
-                                result.PlanType = "Free";
-                            }
-                            else if (planStr.Contains("business", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isFreePlan = false;
-                                result.PlanType = "Business";
-                            }
-                            else if (planStr.Contains("enterprise", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isFreePlan = false;
-                                result.PlanType = "Enterprise";
-                            }
-                            else
-                            {
-                                isFreePlan = false;
-                                result.PlanType = "Pro";
-                            }
-                        }
-                    }
-
-                    if (root.TryGetProperty("access_type_sku", out var skuProp))
-                    {
-                        string? sku = skuProp.GetString();
-                        if (!string.IsNullOrEmpty(sku))
-                        {
-                            if (sku.Contains("free", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isFreePlan = true;
-                                result.PlanType = "Free";
-                            }
-                            else if (sku.Contains("business", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isFreePlan = false;
-                                result.PlanType = "Business";
-                            }
-                            else if (sku.Contains("enterprise", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isFreePlan = false;
-                                result.PlanType = "Enterprise";
-                            }
-                            else
-                            {
-                                isFreePlan = false;
-                                result.PlanType = "Pro";
-                            }
-                        }
-                    }
-
-                    long resetInSecs = 0;
-                    string formattedReset = "";
-                    if (root.TryGetProperty("quota_reset_date_utc", out var rDateProp) && rDateProp.ValueKind == JsonValueKind.String)
-                    {
-                        if (DateTimeOffset.TryParse(rDateProp.GetString(), out var resetDto))
-                        {
-                            var diff = resetDto - DateTimeOffset.UtcNow;
-                            resetInSecs = Math.Max(0, (long)diff.TotalSeconds);
-                            formattedReset = TimeFormatter.FormatResetText(resetInSecs);
-                        }
-                    }
-
-                    if (root.TryGetProperty("quota_snapshots", out var snapshotsProp) && snapshotsProp.ValueKind == JsonValueKind.Object)
-                    {
-                        if (snapshotsProp.TryGetProperty("completions", out var compProp) && compProp.ValueKind == JsonValueKind.Object)
-                        {
-                            double remainingPct = compProp.TryGetProperty("percent_remaining", out var pr) ? pr.GetDouble() : 100.0;
-                            int remaining = compProp.TryGetProperty("remaining", out var rem) ? rem.GetInt32() : 0;
-                            int entitlement = compProp.TryGetProperty("entitlement", out var ent) ? ent.GetInt32() : 2000;
-
-                            completionsWindow = new QuotaWindow
-                            {
-                                Name = entitlement > 0 ? $"Code Completions ({remaining:N0}/{entitlement:N0})" : "Code Completions",
-                                UsedPercent = Math.Max(0, 100.0 - remainingPct),
-                                RemainingPercent = remainingPct,
-                                ResetInSeconds = resetInSecs,
-                                FormattedResetIn = !string.IsNullOrEmpty(formattedReset) ? formattedReset : "월 2,000회 제공"
-                            };
-                        }
-
-                        if (snapshotsProp.TryGetProperty("chat", out var chatProp) && chatProp.ValueKind == JsonValueKind.Object)
-                        {
-                            double remainingPct = chatProp.TryGetProperty("percent_remaining", out var pr) ? pr.GetDouble() : 100.0;
-                            int remaining = chatProp.TryGetProperty("remaining", out var rem) ? rem.GetInt32() : 0;
-                            int entitlement = chatProp.TryGetProperty("entitlement", out var ent) ? ent.GetInt32() : 50;
-
-                            chatWindow = new QuotaWindow
-                            {
-                                Name = entitlement > 0 ? $"Chat ({remaining:N0}/{entitlement:N0})" : "Chat",
-                                UsedPercent = Math.Max(0, 100.0 - remainingPct),
-                                RemainingPercent = remainingPct,
-                                ResetInSeconds = resetInSecs,
-                                FormattedResetIn = !string.IsNullOrEmpty(formattedReset) ? formattedReset : "월 50회 제공"
-                            };
-                        }
-
-                        if (snapshotsProp.TryGetProperty("premium_interactions", out var premProp) && premProp.ValueKind == JsonValueKind.Object)
-                        {
-                            double remainingPct = premProp.TryGetProperty("percent_remaining", out var pr) ? pr.GetDouble() : 100.0;
-                            int remaining = premProp.TryGetProperty("remaining", out var rem) ? rem.GetInt32() : 0;
-                            int entitlement = premProp.TryGetProperty("entitlement", out var ent) ? ent.GetInt32() : 0;
-
-                            premiumWindow = new QuotaWindow
-                            {
-                                Name = entitlement > 0 ? $"Premium Requests ({remaining:N0}/{entitlement:N0})" : "Premium Requests",
-                                UsedPercent = Math.Max(0, 100.0 - remainingPct),
-                                RemainingPercent = remainingPct,
-                                ResetInSeconds = resetInSecs,
-                                FormattedResetIn = !string.IsNullOrEmpty(formattedReset) ? formattedReset : "Active"
-                            };
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            bool hasStep1Data = completionsWindow != null || chatWindow != null || premiumWindow != null || !string.IsNullOrEmpty(result.PlanType);
-
-            // Step 2: Query official api.githubcopilot.com/models to verify live subscription and model catalog
-            HttpResponseMessage? respModels = null;
-            try
-            {
-                using var reqModels = new HttpRequestMessage(HttpMethod.Get, CopilotModelsUrl);
-                reqModels.Headers.Add("Authorization", $"Bearer {token}");
-                reqModels.Headers.Add("Accept", "application/json");
-                reqModels.Headers.TryAddWithoutValidation("User-Agent", "GitHubCopilotChat/0.24.1");
-                reqModels.Headers.TryAddWithoutValidation("Editor-Version", "vscode/1.96.0");
-
-                respModels = await _httpClient.SendAsync(reqModels, cancellationToken);
-            }
-            catch { }
-
-            bool step2Success = respModels?.IsSuccessStatusCode == true;
-
-            if (!hasStep1Data && !step2Success)
-            {
-                if (respModels?.StatusCode == HttpStatusCode.Unauthorized || respModels?.StatusCode == HttpStatusCode.Forbidden)
-                {
-                    result.IsSuccess = false;
-                    result.IsAuthMissing = true;
-                    result.AuthStatus = ProviderAuthStatus.Expired;
-                    result.ErrorMessage = "GitHub Copilot 인증이 만료되었거나 구독이 활성화되지 않았습니다.";
-                    return result;
-                }
-
                 result.IsSuccess = false;
-                result.AuthStatus = ProviderAuthStatus.Error;
-                result.ErrorMessage = respModels != null ? $"Copilot API Error ({(int)respModels.StatusCode})" : "GitHub Copilot 쿼터 정보를 조회할 수 없습니다.";
+                result.IsAuthMissing = response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+                result.AuthStatus = result.IsAuthMissing ? ProviderAuthStatus.Expired : ProviderAuthStatus.Error;
+                result.ErrorMessage = result.IsAuthMissing
+                    ? "GitHub Copilot 인증이 만료되었거나 Copilot 사용 권한을 확인할 수 없습니다."
+                    : $"GitHub Copilot quota API error ({(int)response.StatusCode}).";
                 return result;
             }
 
-            var groups = new List<QuotaGroup>();
+            string json = await response.Content.ReadAsStringAsync(cancellationToken);
+            using JsonDocument doc = JsonDocument.Parse(json);
+            JsonElement root = doc.RootElement;
 
-            if (string.IsNullOrEmpty(result.PlanType))
+            if (root.TryGetProperty("login", out JsonElement loginProp) && loginProp.ValueKind == JsonValueKind.String)
             {
-                result.PlanType = isFreePlan ? "Free" : "Pro";
+                result.AccountEmail = loginProp.GetString();
             }
 
-            // Track 1: Standard Models (OpenAI 범용)
+            (string planType, bool isFreePlan) = ResolvePlan(root);
+            result.PlanType = planType;
+
+            long resetInSeconds = 0;
+            string resetText = "";
+            if (root.TryGetProperty("quota_reset_date_utc", out JsonElement resetProp)
+                && resetProp.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(resetProp.GetString(), out DateTimeOffset resetAt))
+            {
+                TimeSpan diff = resetAt - DateTimeOffset.UtcNow;
+                resetInSeconds = Math.Max(0, (long)diff.TotalSeconds);
+                resetText = TimeFormatter.FormatResetText(resetInSeconds);
+            }
+
+            QuotaWindow? completionsWindow = null;
+            QuotaWindow? chatWindow = null;
+            QuotaWindow? premiumWindow = null;
+            bool hasUnlimitedQuota = false;
+
+            if (root.TryGetProperty("quota_snapshots", out JsonElement snapshots)
+                && snapshots.ValueKind == JsonValueKind.Object)
+            {
+                completionsWindow = ParseFiniteQuotaWindow(
+                    snapshots,
+                    "completions",
+                    "Code Completions",
+                    resetInSeconds,
+                    resetText);
+
+                chatWindow = ParseFiniteQuotaWindow(
+                    snapshots,
+                    "chat",
+                    "Chat",
+                    resetInSeconds,
+                    resetText);
+
+                premiumWindow = ParseFiniteQuotaWindow(
+                    snapshots,
+                    "premium_interactions",
+                    "Premium Requests",
+                    resetInSeconds,
+                    resetText);
+
+                hasUnlimitedQuota = SnapshotIsUnlimited(snapshots, "completions")
+                                    || SnapshotIsUnlimited(snapshots, "chat")
+                                    || SnapshotIsUnlimited(snapshots, "premium_interactions");
+            }
+
+            var groups = new List<QuotaGroup>();
             var standardGroup = new QuotaGroup
             {
                 GroupId = "standard",
-                GroupName = isFreePlan ? "기본 모델 (Copilot Free)" : "Standard Models (OpenAI 범용)",
-                ModelsList = new List<string>
-                {
-                    "GPT-4o",
-                    "GPT-4.1",
-                    "GPT-5 mini",
-                    "GPT-4o mini",
-                    "GPT 3.5 Turbo"
-                }
+                GroupName = isFreePlan ? "Copilot Free" : "Copilot Standard"
             };
 
             if (completionsWindow != null) standardGroup.Windows.Add(completionsWindow);
             if (chatWindow != null) standardGroup.Windows.Add(chatWindow);
 
-            // Track 2: Premium Models (Claude, Gemini, 고급 추론)
             var premiumGroup = new QuotaGroup
             {
                 GroupId = "premium",
-                GroupName = "Premium Models (Claude · Gemini · 추론)",
-                ModelsList = new List<string>
-                {
-                    "Claude Opus 5 (Thinking)",
-                    "Claude Sonnet 5 (Thinking)",
-                    "Claude Haiku 4.5",
-                    "Gemini 3.1 Pro",
-                    "Kimi K3"
-                }
+                GroupName = "Premium Requests"
             };
 
-            if (premiumWindow != null)
-            {
-                premiumGroup.Windows.Add(premiumWindow);
-            }
+            if (premiumWindow != null) premiumGroup.Windows.Add(premiumWindow);
 
+            QuotaWindow? primaryWindow;
             if (isFreePlan)
             {
-                // Free 플랜: Premium Requests는 숨기고, 기본 모델(Code Completions & Chat)만 표시
                 if (standardGroup.Windows.Count > 0)
                 {
                     groups.Add(standardGroup);
                 }
 
-                var primaryWin = completionsWindow ?? standardGroup.Windows.FirstOrDefault();
-                result.PrimaryRemainingPercent = primaryWin?.RemainingPercent ?? 100.0;
-                result.ResetText = primaryWin?.FormattedResetIn ?? "월 2,000회";
-                result.FormattedNextResetIn = result.ResetText;
+                primaryWindow = completionsWindow ?? chatWindow;
             }
             else
             {
-                // 유료 플랜: 어차피 무제한인 기본 모델(Standard)은 숨기고, 유한한 Premium Requests만 표시
                 if (premiumGroup.Windows.Count > 0)
                 {
                     groups.Add(premiumGroup);
@@ -315,14 +179,34 @@ public class CopilotQuotaProvider : IQuotaProvider
                     groups.Add(standardGroup);
                 }
 
-                var primaryWin = premiumWindow ?? groups.SelectMany(g => g.Windows).FirstOrDefault();
-                result.PrimaryRemainingPercent = primaryWin?.RemainingPercent ?? 100.0;
-                result.ResetText = primaryWin?.FormattedResetIn ?? "Active";
-                result.FormattedNextResetIn = result.ResetText;
+                primaryWindow = premiumWindow ?? completionsWindow ?? chatWindow;
             }
 
             result.Groups = groups;
-            result.Windows = groups.SelectMany(g => g.Windows).ToList();
+            result.Windows = groups.SelectMany(group => group.Windows).ToList();
+
+            if (primaryWindow != null)
+            {
+                result.PrimaryRemainingPercent = primaryWindow.RemainingPercent;
+                result.NextResetInSeconds = primaryWindow.ResetInSeconds;
+                result.ResetText = primaryWindow.FormattedResetIn;
+                result.FormattedNextResetIn = primaryWindow.FormattedResetIn;
+            }
+            else if (hasUnlimitedQuota)
+            {
+                result.PrimaryRemainingPercent = 100.0;
+                result.ResetText = "Unlimited";
+                result.FormattedNextResetIn = "Unlimited";
+            }
+            else
+            {
+                // A successful account response without a finite quota is still authenticated.
+                // Do not invent a 100% remaining value when GitHub did not report one.
+                result.PrimaryRemainingPercent = 0.0;
+                result.ResetText = !string.IsNullOrEmpty(resetText) ? resetText : "No finite quota reported";
+                result.FormattedNextResetIn = result.ResetText;
+                result.NextResetInSeconds = resetInSeconds;
+            }
 
             result.DetailsSubtitle = !string.IsNullOrEmpty(result.AccountEmail) ? result.AccountEmail : "GitHub";
             result.AuthStatus = ProviderAuthStatus.Connected;
@@ -345,6 +229,134 @@ public class CopilotQuotaProvider : IQuotaProvider
         }
     }
 
+    private static (string PlanType, bool IsFreePlan) ResolvePlan(JsonElement root)
+    {
+        string? sku = GetString(root, "access_type_sku");
+        if (!string.IsNullOrEmpty(sku))
+        {
+            if (sku.Contains("free", StringComparison.OrdinalIgnoreCase)) return ("Free", true);
+            if (sku.Contains("enterprise", StringComparison.OrdinalIgnoreCase)) return ("Enterprise", false);
+            if (sku.Contains("business", StringComparison.OrdinalIgnoreCase)) return ("Business", false);
+            if (sku.Contains("pro_plus", StringComparison.OrdinalIgnoreCase)
+                || sku.Contains("pro-plus", StringComparison.OrdinalIgnoreCase)
+                || sku.Contains("pro+", StringComparison.OrdinalIgnoreCase)) return ("Pro+", false);
+            if (sku.Contains("max", StringComparison.OrdinalIgnoreCase)) return ("Max", false);
+            if (sku.Contains("pro", StringComparison.OrdinalIgnoreCase)) return ("Pro", false);
+        }
+
+        string? plan = GetString(root, "copilot_plan");
+        if (!string.IsNullOrEmpty(plan))
+        {
+            if (plan.Contains("free", StringComparison.OrdinalIgnoreCase)) return ("Free", true);
+            if (plan.Contains("enterprise", StringComparison.OrdinalIgnoreCase)) return ("Enterprise", false);
+            if (plan.Contains("business", StringComparison.OrdinalIgnoreCase)) return ("Business", false);
+            if (plan.Contains("pro", StringComparison.OrdinalIgnoreCase)) return ("Pro", false);
+            if (plan.Equals("individual", StringComparison.OrdinalIgnoreCase)) return ("Individual", false);
+            return (plan, false);
+        }
+
+        return ("Unknown", false);
+    }
+
+    private static QuotaWindow? ParseFiniteQuotaWindow(
+        JsonElement snapshots,
+        string key,
+        string displayName,
+        long resetInSeconds,
+        string resetText)
+    {
+        if (!snapshots.TryGetProperty(key, out JsonElement snapshot)
+            || snapshot.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (TryGetBoolean(snapshot, "has_quota", out bool hasQuota) && !hasQuota)
+        {
+            return null;
+        }
+
+        if (TryGetBoolean(snapshot, "unlimited", out bool unlimited) && unlimited)
+        {
+            return null;
+        }
+
+        long entitlement = GetInt64(snapshot, "entitlement", -1);
+        if (entitlement <= 0)
+        {
+            return null;
+        }
+
+        long remaining = GetInt64(snapshot, "remaining", GetInt64(snapshot, "quota_remaining", 0));
+        double remainingPercent = GetDouble(snapshot, "percent_remaining",
+            entitlement > 0 ? (double)remaining / entitlement * 100.0 : 0.0);
+        remainingPercent = Math.Clamp(remainingPercent, 0.0, 100.0);
+
+        return new QuotaWindow
+        {
+            Name = $"{displayName} ({remaining:N0}/{entitlement:N0})",
+            UsedPercent = Math.Clamp(100.0 - remainingPercent, 0.0, 100.0),
+            RemainingPercent = remainingPercent,
+            ResetInSeconds = resetInSeconds,
+            FormattedResetIn = !string.IsNullOrEmpty(resetText) ? resetText : "Reset unavailable"
+        };
+    }
+
+    private static bool SnapshotIsUnlimited(JsonElement snapshots, string key)
+    {
+        return snapshots.TryGetProperty(key, out JsonElement snapshot)
+               && snapshot.ValueKind == JsonValueKind.Object
+               && TryGetBoolean(snapshot, "unlimited", out bool unlimited)
+               && unlimited;
+    }
+
+    private static string? GetString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out JsonElement property)
+               && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+    }
+
+    private static bool TryGetBoolean(JsonElement element, string propertyName, out bool value)
+    {
+        value = false;
+        if (!element.TryGetProperty(propertyName, out JsonElement property)) return false;
+        if (property.ValueKind == JsonValueKind.True)
+        {
+            value = true;
+            return true;
+        }
+        if (property.ValueKind == JsonValueKind.False)
+        {
+            value = false;
+            return true;
+        }
+        return false;
+    }
+
+    private static long GetInt64(JsonElement element, string propertyName, long fallback)
+    {
+        if (!element.TryGetProperty(propertyName, out JsonElement property)
+            || property.ValueKind != JsonValueKind.Number)
+        {
+            return fallback;
+        }
+
+        return property.TryGetInt64(out long value) ? value : fallback;
+    }
+
+    private static double GetDouble(JsonElement element, string propertyName, double fallback)
+    {
+        if (!element.TryGetProperty(propertyName, out JsonElement property)
+            || property.ValueKind != JsonValueKind.Number)
+        {
+            return fallback;
+        }
+
+        return property.TryGetDouble(out double value) ? value : fallback;
+    }
+
     private static string? LoadCredentials()
     {
         string? envToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN")
@@ -352,10 +364,8 @@ public class CopilotQuotaProvider : IQuotaProvider
                            ?? Environment.GetEnvironmentVariable("COPILOT_TOKEN");
         if (!string.IsNullOrEmpty(envToken)) return CleanToken(envToken);
 
-        // Windows Credential Manager check
         if (OperatingSystem.IsWindows())
         {
-            // 1. Enumerate gh:github.com* targets (e.g. gh:github.com, gh:github.com:username, gh:github.com:)
             var ghCreds = Win32CredMan.EnumerateCredentials("gh:github.com*");
             foreach (var (_, secret) in ghCreds)
             {
@@ -363,7 +373,6 @@ public class CopilotQuotaProvider : IQuotaProvider
                 if (IsValidGitHubToken(cleaned)) return cleaned;
             }
 
-            // 2. Direct key probes
             string[] directTargets = { "gh:github.com", "gh:github.com:", "GitHub - https://api.github.com", "git:https://github.com" };
             foreach (var target in directTargets)
             {
@@ -375,11 +384,11 @@ public class CopilotQuotaProvider : IQuotaProvider
                 }
             }
 
-            // 3. General credential scan for github tokens
             var allCreds = Win32CredMan.EnumerateCredentials();
             foreach (var (target, secret) in allCreds)
             {
-                if (target.Contains("github", StringComparison.OrdinalIgnoreCase) || target.Contains("gh:", StringComparison.OrdinalIgnoreCase))
+                if (target.Contains("github", StringComparison.OrdinalIgnoreCase)
+                    || target.Contains("gh:", StringComparison.OrdinalIgnoreCase))
                 {
                     string cleaned = CleanToken(secret);
                     if (IsValidGitHubToken(cleaned)) return cleaned;
@@ -402,7 +411,6 @@ public class CopilotQuotaProvider : IQuotaProvider
             Path.Combine(localAppData, "gh", "hosts.yml")
         };
 
-        // Automatic WSL Distro Discovery
         if (OperatingSystem.IsWindows())
         {
             try
@@ -431,18 +439,16 @@ public class CopilotQuotaProvider : IQuotaProvider
                     string[] bases = { $@"\\wsl.localhost\{distro}", $@"\\wsl$\{distro}" };
                     foreach (var b in bases)
                     {
-                        if (Directory.Exists(b))
+                        if (!Directory.Exists(b)) continue;
+
+                        string home = Path.Combine(b, "home");
+                        if (!Directory.Exists(home)) continue;
+
+                        foreach (var userDir in Directory.GetDirectories(home))
                         {
-                            string home = Path.Combine(b, "home");
-                            if (Directory.Exists(home))
-                            {
-                                foreach (var userDir in Directory.GetDirectories(home))
-                                {
-                                    paths.Add(Path.Combine(userDir, ".config", "gh", "hosts.yml"));
-                                    paths.Add(Path.Combine(userDir, ".config", "github-copilot", "hosts.json"));
-                                    paths.Add(Path.Combine(userDir, ".config", "github-copilot", "apps.json"));
-                                }
-                            }
+                            paths.Add(Path.Combine(userDir, ".config", "gh", "hosts.yml"));
+                            paths.Add(Path.Combine(userDir, ".config", "github-copilot", "hosts.json"));
+                            paths.Add(Path.Combine(userDir, ".config", "github-copilot", "apps.json"));
                         }
                     }
                 }
@@ -450,50 +456,51 @@ public class CopilotQuotaProvider : IQuotaProvider
             catch { }
         }
 
-        foreach (var p in paths)
+        foreach (var path in paths)
         {
-            if (File.Exists(p))
+            if (!File.Exists(path)) continue;
+
+            try
             {
-                try
+                string content = File.ReadAllText(path);
+                if (path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                 {
-                    string content = File.ReadAllText(p);
-                    if (p.EndsWith(".json"))
+                    using var doc = JsonDocument.Parse(content);
+                    foreach (var property in doc.RootElement.EnumerateObject())
                     {
-                        using var doc = JsonDocument.Parse(content);
-                        foreach (var prop in doc.RootElement.EnumerateObject())
+                        if (property.Value.TryGetProperty("oauth_token", out JsonElement tokenProperty))
                         {
-                            if (prop.Value.TryGetProperty("oauth_token", out var tok))
-                            {
-                                string? val = tok.GetString();
-                                if (!string.IsNullOrEmpty(val)) return CleanToken(val);
-                            }
-                            if (prop.Value.TryGetProperty("user", out var usr) && usr.TryGetProperty("oauth_token", out var ut))
-                            {
-                                string? val = ut.GetString();
-                                if (!string.IsNullOrEmpty(val)) return CleanToken(val);
-                            }
+                            string? value = tokenProperty.GetString();
+                            if (!string.IsNullOrEmpty(value)) return CleanToken(value);
                         }
-                    }
-                    else if (p.EndsWith(".yml") || p.EndsWith(".yaml"))
-                    {
-                        foreach (var line in File.ReadAllLines(p))
+
+                        if (property.Value.TryGetProperty("user", out JsonElement user)
+                            && user.TryGetProperty("oauth_token", out JsonElement userToken))
                         {
-                            string trimmed = line.Trim();
-                            if (trimmed.StartsWith("oauth_token:"))
-                            {
-                                string[] parts = trimmed.Split(':', 2);
-                                if (parts.Length > 1)
-                                {
-                                    string val = parts[1].Trim().Trim('"', '\'');
-                                    if (!string.IsNullOrEmpty(val)) return CleanToken(val);
-                                }
-                            }
+                            string? value = userToken.GetString();
+                            if (!string.IsNullOrEmpty(value)) return CleanToken(value);
                         }
                     }
                 }
-                catch { }
+                else if (path.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
+                         || path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var line in File.ReadAllLines(path))
+                    {
+                        string trimmed = line.Trim();
+                        if (!trimmed.StartsWith("oauth_token:", StringComparison.Ordinal)) continue;
+
+                        string[] parts = trimmed.Split(':', 2);
+                        if (parts.Length <= 1) continue;
+
+                        string value = parts[1].Trim().Trim('"', '\'');
+                        if (!string.IsNullOrEmpty(value)) return CleanToken(value);
+                    }
+                }
             }
+            catch { }
         }
+
         return null;
     }
 
@@ -505,7 +512,7 @@ public class CopilotQuotaProvider : IQuotaProvider
     private static bool IsValidGitHubToken(string token)
     {
         if (string.IsNullOrWhiteSpace(token) || token.Length < 10) return false;
-        // GitHub tokens usually start with gho_, ghp_, ghu_, ghs_, github_pat_, or are 40-char hex
+
         return token.StartsWith("gho_", StringComparison.OrdinalIgnoreCase)
                || token.StartsWith("ghp_", StringComparison.OrdinalIgnoreCase)
                || token.StartsWith("ghu_", StringComparison.OrdinalIgnoreCase)
