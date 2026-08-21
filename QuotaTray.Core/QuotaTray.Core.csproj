@@ -13,11 +13,17 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(AntigravityOAuthClientId)' != ''">
-    <AssemblyMetadata Include="AntigravityOAuthClientId" Value="$(AntigravityOAuthClientId)" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>AntigravityOAuthClientId</_Parameter1>
+      <_Parameter2>$(AntigravityOAuthClientId)</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup Condition="'$(AntigravityOAuthClientSecret)' != ''">
-    <AssemblyMetadata Include="AntigravityOAuthClientSecret" Value="$(AntigravityOAuthClientSecret)" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>AntigravityOAuthClientSecret</_Parameter1>
+      <_Parameter2>$(AntigravityOAuthClientSecret)</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>
