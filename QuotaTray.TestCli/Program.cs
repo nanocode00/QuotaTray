@@ -1,4 +1,6 @@
 using System;
+using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using QuotaTray.Core.Providers;
 
@@ -8,10 +10,84 @@ class Program
 {
     static async Task Main(string[] args)
     {
-
+        if (args.Length > 0 && args[0].Equals("refresh-test", StringComparison.OrdinalIgnoreCase))
+        {
+            await RunForcedRefreshProbeAsync();
+            return;
+        }
 
         var provider = new AntigravityQuotaProvider();
         var res = await provider.FetchQuotaAsync();
+        PrintResult(res);
+    }
+
+    private static async Task RunForcedRefreshProbeAsync()
+    {
+        Console.WriteLine("Antigravity forced refresh probe");
+        Console.WriteLine("This bypasses the currently-valid access token and tests QuotaTray's direct refresh path.");
+        Console.WriteLine("agy does not need to be running. Tokens and OAuth secrets are never printed.");
+        Console.WriteLine();
+
+        var provider = new AntigravityQuotaProvider();
+        Type providerType = typeof(AntigravityQuotaProvider);
+
+        MethodInfo? loadCredentials = providerType.GetMethod(
+            "LoadStoredCredentials",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        MethodInfo? refreshToken = providerType.GetMethod(
+            "TryRefreshTokenAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        FieldInfo? lastRefreshError = providerType.GetField(
+            "_lastRefreshError",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        if (loadCredentials == null || refreshToken == null || lastRefreshError == null)
+        {
+            Console.WriteLine("REFRESH PROBE FAILED: provider internals changed; update the diagnostic probe.");
+            Environment.ExitCode = 2;
+            return;
+        }
+
+        loadCredentials.Invoke(provider, null);
+
+        object? invocationResult = refreshToken.Invoke(provider, new object[] { CancellationToken.None });
+        if (invocationResult is not Task<bool> refreshTask)
+        {
+            Console.WriteLine("REFRESH PROBE FAILED: unexpected refresh method result.");
+            Environment.ExitCode = 3;
+            return;
+        }
+
+        bool refreshed = await refreshTask;
+        if (!refreshed)
+        {
+            string? error = lastRefreshError.GetValue(provider) as string;
+            Console.WriteLine($"REFRESH PROBE FAILED: {error ?? "unknown refresh error"}");
+            Environment.ExitCode = 4;
+            return;
+        }
+
+        Console.WriteLine("Direct OAuth refresh: OK");
+        Console.WriteLine("Now querying quota with the refreshed in-memory access token...");
+
+        var result = await provider.FetchQuotaAsync();
+        PrintResult(result);
+
+        if (result.IsSuccess)
+        {
+            Console.WriteLine();
+            Console.WriteLine("REFRESH PROBE SUCCESS: QuotaTray refreshed and queried Antigravity without an agy process.");
+        }
+        else
+        {
+            Console.WriteLine();
+            Console.WriteLine("REFRESH PROBE PARTIAL: refresh succeeded, but the quota query failed.");
+            Environment.ExitCode = 5;
+        }
+    }
+
+    private static void PrintResult(dynamic res)
+    {
         Console.WriteLine($"IsSuccess: {res.IsSuccess}");
         Console.WriteLine($"AuthStatus: {res.AuthStatus}");
         Console.WriteLine($"ErrorMessage: {res.ErrorMessage}");
