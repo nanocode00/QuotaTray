@@ -25,7 +25,7 @@ jobs:
             artifact_name: QuotaTray-macos-arm64.tar.gz
             binary_name: QuotaTray.Desktop
           - os: osx-x64
-            runner: macos-13
+            runner: macos-latest
             artifact_name: QuotaTray-macos-x64.tar.gz
             binary_name: QuotaTray.Desktop
 

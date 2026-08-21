@@ -210,148 +210,123 @@ public class CopilotQuotaProvider : IQuotaProvider
             }
             catch { }
 
+            bool hasStep1Data = completionsWindow != null || chatWindow != null || premiumWindow != null || !string.IsNullOrEmpty(result.PlanType);
+
             // Step 2: Query official api.githubcopilot.com/models to verify live subscription and model catalog
-            using var reqModels = new HttpRequestMessage(HttpMethod.Get, CopilotModelsUrl);
-            reqModels.Headers.Add("Authorization", $"Bearer {token}");
-            reqModels.Headers.Add("Accept", "application/json");
-            reqModels.Headers.TryAddWithoutValidation("User-Agent", "GitHubCopilotChat/0.24.1");
-            reqModels.Headers.TryAddWithoutValidation("Editor-Version", "vscode/1.96.0");
-
-            var respModels = await _httpClient.SendAsync(reqModels, cancellationToken);
-            if (respModels.IsSuccessStatusCode)
+            HttpResponseMessage? respModels = null;
+            try
             {
-                var groups = new List<QuotaGroup>();
+                using var reqModels = new HttpRequestMessage(HttpMethod.Get, CopilotModelsUrl);
+                reqModels.Headers.Add("Authorization", $"Bearer {token}");
+                reqModels.Headers.Add("Accept", "application/json");
+                reqModels.Headers.TryAddWithoutValidation("User-Agent", "GitHubCopilotChat/0.24.1");
+                reqModels.Headers.TryAddWithoutValidation("Editor-Version", "vscode/1.96.0");
 
-                if (string.IsNullOrEmpty(result.PlanType))
-                {
-                    result.PlanType = isFreePlan ? "Free" : "Pro";
-                }
-
-                // Track 1: Standard Models (OpenAI 범용)
-                var standardGroup = new QuotaGroup
-                {
-                    GroupId = "standard",
-                    GroupName = isFreePlan ? "기본 모델 (Copilot Free)" : "Standard Models (OpenAI 범용)",
-                    ModelsList = new List<string>
-                    {
-                        "GPT-4o",
-                        "GPT-4.1",
-                        "GPT-5 mini",
-                        "GPT-4o mini",
-                        "GPT 3.5 Turbo"
-                    }
-                };
-
-                if (chatWindow != null || completionsWindow != null)
-                {
-                    if (completionsWindow != null) standardGroup.Windows.Add(completionsWindow);
-                    if (chatWindow != null) standardGroup.Windows.Add(chatWindow);
-                }
-                else
-                {
-                    if (isFreePlan)
-                    {
-                        standardGroup.Windows.Add(new QuotaWindow
-                        {
-                            Name = "코드 완성 (월 2,000회 한도)",
-                            UsedPercent = 0.0,
-                            RemainingPercent = 100.0,
-                            ResetInSeconds = 0,
-                            FormattedResetIn = "월 2,000회"
-                        });
-                        standardGroup.Windows.Add(new QuotaWindow
-                        {
-                            Name = "채팅 메시지 (월 50회 한도)",
-                            UsedPercent = 0.0,
-                            RemainingPercent = 100.0,
-                            ResetInSeconds = 0,
-                            FormattedResetIn = "월 50회"
-                        });
-                    }
-                    else
-                    {
-                        standardGroup.Windows.Add(new QuotaWindow
-                        {
-                            Name = "채팅 및 코드 완성",
-                            UsedPercent = 0.0,
-                            RemainingPercent = 100.0,
-                            ResetInSeconds = 0,
-                            FormattedResetIn = "무제한 활성"
-                        });
-                    }
-                }
-                // Track 2: Premium Models (Claude, Gemini, 고급 추론)
-                var premiumGroup = new QuotaGroup
-                {
-                    GroupId = "premium",
-                    GroupName = "Premium Models (Claude · Gemini · 추론)",
-                    ModelsList = new List<string>
-                    {
-                        "Claude Opus 5 (Thinking)",
-                        "Claude Sonnet 5 (Thinking)",
-                        "Claude Haiku 4.5",
-                        "Gemini 3.1 Pro",
-                        "Kimi K3"
-                    }
-                };
-
-                if (premiumWindow != null)
-                {
-                    premiumGroup.Windows.Add(premiumWindow);
-                }
-                else
-                {
-                    premiumGroup.Windows.Add(new QuotaWindow
-                    {
-                        Name = isFreePlan ? "프리미엄 모델 풀" : "프리미엄 요청 (월간 공유 풀)",
-                        UsedPercent = 0.0,
-                        RemainingPercent = 100.0,
-                        ResetInSeconds = 0,
-                        FormattedResetIn = isFreePlan ? "Pro 요금제 권장" : "Active"
-                    });
-                }
-
-                if (isFreePlan)
-                {
-                    // Free 플랜: Premium Requests는 숨기고, 기본 모델(Code Completions & Chat)만 표시
-                    groups.Add(standardGroup);
-
-                    var primaryWin = completionsWindow ?? standardGroup.Windows.FirstOrDefault();
-                    result.PrimaryRemainingPercent = primaryWin?.RemainingPercent ?? 100.0;
-                    result.ResetText = primaryWin?.FormattedResetIn ?? "월 2,000회";
-                    result.FormattedNextResetIn = result.ResetText;
-                }
-                else
-                {
-                    // 유료 플랜: 어차피 무제한인 기본 모델(Standard)은 숨기고, 유한한 Premium Requests만 표시
-                    groups.Add(premiumGroup);
-
-                    var primaryWin = premiumWindow ?? premiumGroup.Windows.FirstOrDefault();
-                    result.PrimaryRemainingPercent = primaryWin?.RemainingPercent ?? 100.0;
-                    result.ResetText = primaryWin?.FormattedResetIn ?? "Active";
-                    result.FormattedNextResetIn = result.ResetText;
-                }
-
-                result.Groups = groups;
-                result.Windows = groups.SelectMany(g => g.Windows).ToList();
-
-                result.DetailsSubtitle = "GitHub";
-                result.AuthStatus = ProviderAuthStatus.Connected;
-                result.IsSuccess = true;
-                return result;
+                respModels = await _httpClient.SendAsync(reqModels, cancellationToken);
             }
-            else if (respModels.StatusCode == HttpStatusCode.Unauthorized || respModels.StatusCode == HttpStatusCode.Forbidden)
+            catch { }
+
+            bool step2Success = respModels?.IsSuccessStatusCode == true;
+
+            if (!hasStep1Data && !step2Success)
             {
+                if (respModels?.StatusCode == HttpStatusCode.Unauthorized || respModels?.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    result.IsSuccess = false;
+                    result.IsAuthMissing = true;
+                    result.AuthStatus = ProviderAuthStatus.Expired;
+                    result.ErrorMessage = "GitHub Copilot 인증이 만료되었거나 구독이 활성화되지 않았습니다.";
+                    return result;
+                }
+
                 result.IsSuccess = false;
-                result.IsAuthMissing = true;
-                result.AuthStatus = ProviderAuthStatus.Expired;
-                result.ErrorMessage = "GitHub Copilot 인증이 만료되었거나 구독이 활성화되지 않았습니다.";
+                result.AuthStatus = ProviderAuthStatus.Error;
+                result.ErrorMessage = respModels != null ? $"Copilot API Error ({(int)respModels.StatusCode})" : "GitHub Copilot 쿼터 정보를 조회할 수 없습니다.";
                 return result;
             }
 
-            result.IsSuccess = false;
-            result.AuthStatus = ProviderAuthStatus.Error;
-            result.ErrorMessage = $"API Error ({(int)respModels.StatusCode})";
+            var groups = new List<QuotaGroup>();
+
+            if (string.IsNullOrEmpty(result.PlanType))
+            {
+                result.PlanType = isFreePlan ? "Free" : "Pro";
+            }
+
+            // Track 1: Standard Models (OpenAI 범용)
+            var standardGroup = new QuotaGroup
+            {
+                GroupId = "standard",
+                GroupName = isFreePlan ? "기본 모델 (Copilot Free)" : "Standard Models (OpenAI 범용)",
+                ModelsList = new List<string>
+                {
+                    "GPT-4o",
+                    "GPT-4.1",
+                    "GPT-5 mini",
+                    "GPT-4o mini",
+                    "GPT 3.5 Turbo"
+                }
+            };
+
+            if (completionsWindow != null) standardGroup.Windows.Add(completionsWindow);
+            if (chatWindow != null) standardGroup.Windows.Add(chatWindow);
+
+            // Track 2: Premium Models (Claude, Gemini, 고급 추론)
+            var premiumGroup = new QuotaGroup
+            {
+                GroupId = "premium",
+                GroupName = "Premium Models (Claude · Gemini · 추론)",
+                ModelsList = new List<string>
+                {
+                    "Claude Opus 5 (Thinking)",
+                    "Claude Sonnet 5 (Thinking)",
+                    "Claude Haiku 4.5",
+                    "Gemini 3.1 Pro",
+                    "Kimi K3"
+                }
+            };
+
+            if (premiumWindow != null)
+            {
+                premiumGroup.Windows.Add(premiumWindow);
+            }
+
+            if (isFreePlan)
+            {
+                // Free 플랜: Premium Requests는 숨기고, 기본 모델(Code Completions & Chat)만 표시
+                if (standardGroup.Windows.Count > 0)
+                {
+                    groups.Add(standardGroup);
+                }
+
+                var primaryWin = completionsWindow ?? standardGroup.Windows.FirstOrDefault();
+                result.PrimaryRemainingPercent = primaryWin?.RemainingPercent ?? 100.0;
+                result.ResetText = primaryWin?.FormattedResetIn ?? "월 2,000회";
+                result.FormattedNextResetIn = result.ResetText;
+            }
+            else
+            {
+                // 유료 플랜: 어차피 무제한인 기본 모델(Standard)은 숨기고, 유한한 Premium Requests만 표시
+                if (premiumGroup.Windows.Count > 0)
+                {
+                    groups.Add(premiumGroup);
+                }
+                else if (standardGroup.Windows.Count > 0)
+                {
+                    groups.Add(standardGroup);
+                }
+
+                var primaryWin = premiumWindow ?? groups.SelectMany(g => g.Windows).FirstOrDefault();
+                result.PrimaryRemainingPercent = primaryWin?.RemainingPercent ?? 100.0;
+                result.ResetText = primaryWin?.FormattedResetIn ?? "Active";
+                result.FormattedNextResetIn = result.ResetText;
+            }
+
+            result.Groups = groups;
+            result.Windows = groups.SelectMany(g => g.Windows).ToList();
+
+            result.DetailsSubtitle = !string.IsNullOrEmpty(result.AccountEmail) ? result.AccountEmail : "GitHub";
+            result.AuthStatus = ProviderAuthStatus.Connected;
+            result.IsSuccess = true;
             return result;
         }
         catch (OperationCanceledException)
@@ -375,15 +350,41 @@ public class CopilotQuotaProvider : IQuotaProvider
         string? envToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN")
                            ?? Environment.GetEnvironmentVariable("GH_TOKEN")
                            ?? Environment.GetEnvironmentVariable("COPILOT_TOKEN");
-        if (!string.IsNullOrEmpty(envToken)) return envToken;
+        if (!string.IsNullOrEmpty(envToken)) return CleanToken(envToken);
 
         // Windows Credential Manager check
         if (OperatingSystem.IsWindows())
         {
-            string? cred = Win32CredMan.ReadCredential("gh:github.com")
-                           ?? Win32CredMan.ReadCredential("GitHub - https://api.github.com")
-                           ?? Win32CredMan.ReadCredential("git:https://github.com");
-            if (!string.IsNullOrEmpty(cred)) return cred;
+            // 1. Enumerate gh:github.com* targets (e.g. gh:github.com, gh:github.com:username, gh:github.com:)
+            var ghCreds = Win32CredMan.EnumerateCredentials("gh:github.com*");
+            foreach (var (_, secret) in ghCreds)
+            {
+                string cleaned = CleanToken(secret);
+                if (IsValidGitHubToken(cleaned)) return cleaned;
+            }
+
+            // 2. Direct key probes
+            string[] directTargets = { "gh:github.com", "gh:github.com:", "GitHub - https://api.github.com", "git:https://github.com" };
+            foreach (var target in directTargets)
+            {
+                string? cred = Win32CredMan.ReadCredential(target);
+                if (!string.IsNullOrEmpty(cred))
+                {
+                    string cleaned = CleanToken(cred);
+                    if (IsValidGitHubToken(cleaned)) return cleaned;
+                }
+            }
+
+            // 3. General credential scan for github tokens
+            var allCreds = Win32CredMan.EnumerateCredentials();
+            foreach (var (target, secret) in allCreds)
+            {
+                if (target.Contains("github", StringComparison.OrdinalIgnoreCase) || target.Contains("gh:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string cleaned = CleanToken(secret);
+                    if (IsValidGitHubToken(cleaned)) return cleaned;
+                }
+            }
         }
 
         string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -461,8 +462,16 @@ public class CopilotQuotaProvider : IQuotaProvider
                         using var doc = JsonDocument.Parse(content);
                         foreach (var prop in doc.RootElement.EnumerateObject())
                         {
-                            if (prop.Value.TryGetProperty("oauth_token", out var tok)) return tok.GetString();
-                            if (prop.Value.TryGetProperty("user", out var usr) && usr.TryGetProperty("oauth_token", out var ut)) return ut.GetString();
+                            if (prop.Value.TryGetProperty("oauth_token", out var tok))
+                            {
+                                string? val = tok.GetString();
+                                if (!string.IsNullOrEmpty(val)) return CleanToken(val);
+                            }
+                            if (prop.Value.TryGetProperty("user", out var usr) && usr.TryGetProperty("oauth_token", out var ut))
+                            {
+                                string? val = ut.GetString();
+                                if (!string.IsNullOrEmpty(val)) return CleanToken(val);
+                            }
                         }
                     }
                     else if (p.EndsWith(".yml") || p.EndsWith(".yaml"))
@@ -476,7 +485,7 @@ public class CopilotQuotaProvider : IQuotaProvider
                                 if (parts.Length > 1)
                                 {
                                     string val = parts[1].Trim().Trim('"', '\'');
-                                    if (!string.IsNullOrEmpty(val)) return val;
+                                    if (!string.IsNullOrEmpty(val)) return CleanToken(val);
                                 }
                             }
                         }
@@ -486,5 +495,22 @@ public class CopilotQuotaProvider : IQuotaProvider
             }
         }
         return null;
+    }
+
+    private static string CleanToken(string token)
+    {
+        return token.Trim('\0', ' ', '\r', '\n', '\t', '"', '\'');
+    }
+
+    private static bool IsValidGitHubToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token) || token.Length < 10) return false;
+        // GitHub tokens usually start with gho_, ghp_, ghu_, ghs_, github_pat_, or are 40-char hex
+        return token.StartsWith("gho_", StringComparison.OrdinalIgnoreCase)
+               || token.StartsWith("ghp_", StringComparison.OrdinalIgnoreCase)
+               || token.StartsWith("ghu_", StringComparison.OrdinalIgnoreCase)
+               || token.StartsWith("ghs_", StringComparison.OrdinalIgnoreCase)
+               || token.StartsWith("github_pat_", StringComparison.OrdinalIgnoreCase)
+               || token.Length >= 30;
     }
 }

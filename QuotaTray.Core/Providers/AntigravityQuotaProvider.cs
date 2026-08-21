@@ -32,18 +32,14 @@ public class AntigravityQuotaProvider : IQuotaProvider
 
     private const string GoogleTokenUrl = "https://oauth2.googleapis.com/token";
 
-    // Known client IDs used by Cloud Code / Antigravity CLI
-    private static readonly (string ClientId, string ClientSecret)[] KnownOAuthClients =
-    {
-        ("681171442111-e6im0aqg6p0pn40bflg06gup9u2m0ivl.apps.googleusercontent.com", "GOCSPX-qB8y8x0E6k4_yE74-vYkZ5b91_8"),
-        ("1076625841029-79f9052b61.apps.googleusercontent.com", "GOCSPX-antigravity-secret"),
-        ("764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com", "GOCSPX-fhkjhfksdhfkjsdhfksjdhf")
-    };
+    private static List<(string ClientId, string ClientSecret)>? _discoveredClients;
+    private static readonly object _discoveryLock = new();
 
     private readonly HttpClient _httpClient;
     private string? _cachedAccessToken;
     private string? _cachedRefreshToken;
     private string? _cachedProjectId;
+    private string? _cachedEmail;
     private string? _customApiKey;
 
     public AntigravityQuotaProvider(HttpClient? httpClient = null)
@@ -90,10 +86,14 @@ public class AntigravityQuotaProvider : IQuotaProvider
                 return result;
             }
 
-            if (string.IsNullOrEmpty(tokenToUse) && !string.IsNullOrEmpty(_cachedRefreshToken))
+            // Always ensure we have a valid access_token
+            if (string.IsNullOrEmpty(tokenToUse) && !string.IsNullOrEmpty(_cachedRefreshToken) && string.IsNullOrEmpty(_customApiKey))
             {
-                await TryRefreshTokenAsync(cancellationToken);
-                tokenToUse = _cachedAccessToken;
+                bool refreshed = await TryRefreshTokenAsync(cancellationToken);
+                if (refreshed)
+                {
+                    tokenToUse = _cachedAccessToken;
+                }
             }
 
             if (string.IsNullOrEmpty(tokenToUse))
@@ -162,6 +162,21 @@ public class AntigravityQuotaProvider : IQuotaProvider
                     $"{{\"project\":\"{_cachedProjectId}\"}}",
                     cancellationToken);
 
+                if (summaryStatus == HttpStatusCode.Unauthorized && !string.IsNullOrEmpty(_cachedRefreshToken) && string.IsNullOrEmpty(_customApiKey))
+                {
+                    bool refreshed = await TryRefreshTokenAsync(cancellationToken);
+                    if (refreshed && !string.IsNullOrEmpty(_cachedAccessToken))
+                    {
+                        tokenToUse = _cachedAccessToken;
+                        (summaryStatus, summaryDoc) = await PostJsonAsync(
+                            quotaSummaryUrl,
+                            tokenToUse,
+                            "antigravity/1.11.5 windows/amd64",
+                            $"{{\"project\":\"{_cachedProjectId}\"}}",
+                            cancellationToken);
+                    }
+                }
+
                 var groups = new List<QuotaGroup>();
 
                 if (summaryStatus == HttpStatusCode.OK && summaryDoc != null)
@@ -220,7 +235,16 @@ public class AntigravityQuotaProvider : IQuotaProvider
                     result.ResetText = "Available";
                 }
 
-                result.DetailsSubtitle = "Gemini";
+                if (!string.IsNullOrEmpty(_cachedEmail))
+                {
+                    result.AccountEmail = _cachedEmail;
+                    result.DetailsSubtitle = _cachedEmail;
+                }
+                else
+                {
+                    result.DetailsSubtitle = "Gemini";
+                }
+
                 result.AuthStatus = ProviderAuthStatus.Connected;
                 result.IsSuccess = true;
                 return result;
@@ -373,12 +397,19 @@ public class AntigravityQuotaProvider : IQuotaProvider
 
     private void LoadStoredCredentials()
     {
+        // Clear previous cached tokens
+        _cachedAccessToken = null;
+        _cachedRefreshToken = null;
+        
+        // Environment variables
         _cachedAccessToken = Environment.GetEnvironmentVariable("ANTIGRAVITY_ACCESS_TOKEN")
                              ?? Environment.GetEnvironmentVariable("GEMINI_ACCESS_TOKEN");
         _cachedRefreshToken = Environment.GetEnvironmentVariable("ANTIGRAVITY_REFRESH_TOKEN")
                               ?? Environment.GetEnvironmentVariable("GEMINI_REFRESH_TOKEN");
 
-        if (!string.IsNullOrEmpty(_cachedAccessToken)) return;
+        // If we already have a refresh token from env, we're good
+        if (!string.IsNullOrEmpty(_cachedRefreshToken)) return;
+        // If we have an access token but no refresh token, still try other sources for refresh token
 
         // Windows Credential Manager
         if (OperatingSystem.IsWindows())
@@ -389,7 +420,8 @@ public class AntigravityQuotaProvider : IQuotaProvider
             if (!string.IsNullOrEmpty(cred))
             {
                 ExtractTokensFromJson(cred);
-                if (!string.IsNullOrEmpty(_cachedAccessToken) || !string.IsNullOrEmpty(_cachedRefreshToken)) return;
+                // Prioritize refresh_token - if we found one, it's more valuable than a possibly stale access_token
+                if (!string.IsNullOrEmpty(_cachedRefreshToken)) return;
             }
         }
 
@@ -405,6 +437,7 @@ public class AntigravityQuotaProvider : IQuotaProvider
             Path.Combine(userProfile, ".gemini", "antigravity-cli", "auth.json"),
             Path.Combine(userProfile, ".gemini", "oauth.json"),
             Path.Combine(appData, "antigravity", "auth.json"),
+            Path.Combine(appData, "gcloud", "application_default_credentials.json"),
             Path.Combine(localAppData, "antigravity", "auth.json")
         };
 
@@ -453,6 +486,22 @@ public class AntigravityQuotaProvider : IQuotaProvider
                 if (oauth.TryGetProperty("access_token", out var oat)) _cachedAccessToken = oat.GetString();
                 if (oauth.TryGetProperty("refresh_token", out var ort)) _cachedRefreshToken = ort.GetString();
             }
+
+            if (root.TryGetProperty("id_token", out var idt))
+            {
+                string? idtStr = idt.GetString();
+                if (!string.IsNullOrEmpty(idtStr))
+                {
+                    string? email = ExtractEmailFromJwt(idtStr);
+                    if (!string.IsNullOrEmpty(email)) _cachedEmail = email;
+                }
+            }
+
+            if (string.IsNullOrEmpty(_cachedEmail) && !string.IsNullOrEmpty(_cachedAccessToken))
+            {
+                string? email = ExtractEmailFromJwt(_cachedAccessToken);
+                if (!string.IsNullOrEmpty(email)) _cachedEmail = email;
+            }
         }
         catch { }
     }
@@ -461,7 +510,8 @@ public class AntigravityQuotaProvider : IQuotaProvider
     {
         if (string.IsNullOrEmpty(_cachedRefreshToken)) return false;
 
-        foreach (var (clientId, clientSecret) in KnownOAuthClients)
+        var clients = GetOAuthClients();
+        foreach (var (clientId, clientSecret) in clients)
         {
             try
             {
@@ -481,9 +531,35 @@ public class AntigravityQuotaProvider : IQuotaProvider
                 {
                     string json = await resp.Content.ReadAsStringAsync(cancellationToken);
                     using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.TryGetProperty("access_token", out var at))
+                    var root = doc.RootElement;
+
+                    if (root.TryGetProperty("access_token", out var at))
                     {
                         _cachedAccessToken = at.GetString();
+
+                        if (root.TryGetProperty("refresh_token", out var newRt))
+                        {
+                            string? newRtStr = newRt.GetString();
+                            if (!string.IsNullOrEmpty(newRtStr))
+                            {
+                                _cachedRefreshToken = newRtStr;
+                            }
+                        }
+
+                        if (root.TryGetProperty("id_token", out var idTokProp))
+                        {
+                            string? idTok = idTokProp.GetString();
+                            if (!string.IsNullOrEmpty(idTok))
+                            {
+                                string? email = ExtractEmailFromJwt(idTok);
+                                if (!string.IsNullOrEmpty(email))
+                                {
+                                    _cachedEmail = email;
+                                }
+                            }
+                        }
+
+                        PersistRefreshedTokens();
                         return true;
                     }
                 }
@@ -492,6 +568,167 @@ public class AntigravityQuotaProvider : IQuotaProvider
         }
 
         return false;
+    }
+
+    private static List<(string ClientId, string ClientSecret)> GetOAuthClients()
+    {
+        lock (_discoveryLock)
+        {
+            if (_discoveredClients != null) return _discoveredClients;
+
+            var list = new List<(string ClientId, string ClientSecret)>();
+
+            // 1. Environment variable override
+            string? envClientId = Environment.GetEnvironmentVariable("ANTIGRAVITY_CLIENT_ID");
+            string? envClientSecret = Environment.GetEnvironmentVariable("ANTIGRAVITY_CLIENT_SECRET");
+            if (!string.IsNullOrEmpty(envClientId) && !string.IsNullOrEmpty(envClientSecret))
+            {
+                list.Add((envClientId, envClientSecret));
+            }
+
+            // 2. Discover dynamically from local agy binary installation
+            var binaryClients = DiscoverClientsFromLocalAgyBinary();
+            list.AddRange(binaryClients);
+
+            _discoveredClients = list;
+            return _discoveredClients;
+        }
+    }
+
+    private static List<(string ClientId, string ClientSecret)> DiscoverClientsFromLocalAgyBinary()
+    {
+        var results = new List<(string ClientId, string ClientSecret)>();
+
+        var candidatePaths = new List<string>();
+        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+        if (OperatingSystem.IsWindows())
+        {
+            candidatePaths.Add(Path.Combine(localAppData, "agy", "bin", "agy.exe"));
+            candidatePaths.Add(Path.Combine(userProfile, ".gemini", "antigravity-cli", "bin", "agy.exe"));
+        }
+        else
+        {
+            candidatePaths.Add(Path.Combine(userProfile, ".local", "bin", "agy"));
+            candidatePaths.Add(Path.Combine(userProfile, ".gemini", "antigravity-cli", "bin", "agy"));
+            candidatePaths.Add("/usr/local/bin/agy");
+            candidatePaths.Add("/usr/bin/agy");
+        }
+
+        // Search in system PATH
+        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrEmpty(pathEnv))
+        {
+            char sep = OperatingSystem.IsWindows() ? ';' : ':';
+            string exeName = OperatingSystem.IsWindows() ? "agy.exe" : "agy";
+            foreach (var dir in pathEnv.Split(sep, StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    string candidate = Path.Combine(dir.Trim(), exeName);
+                    if (!candidatePaths.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                    {
+                        candidatePaths.Add(candidate);
+                    }
+                }
+                catch { }
+            }
+        }
+
+        var clientRegex = new System.Text.RegularExpressions.Regex(@"([0-9]{11,14}-[0-9a-z]{32}\.apps\.googleusercontent\.com)", System.Text.RegularExpressions.RegexOptions.Compiled);
+        var secretRegex = new System.Text.RegularExpressions.Regex(@"(GOCSPX-[0-9a-zA-Z\-_]{28})", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        foreach (var path in candidatePaths)
+        {
+            if (File.Exists(path))
+            {
+                try
+                {
+                    byte[] bytes = File.ReadAllBytes(path);
+                    string str = System.Text.Encoding.Latin1.GetString(bytes);
+
+                    var clientMatches = clientRegex.Matches(str);
+                    var secretMatches = secretRegex.Matches(str);
+
+                    var clientIds = clientMatches.Cast<System.Text.RegularExpressions.Match>().Select(m => m.Groups[1].Value).Distinct().ToList();
+                    var secrets = secretMatches.Cast<System.Text.RegularExpressions.Match>().Select(m => m.Groups[1].Value).Distinct().ToList();
+
+                    foreach (var cid in clientIds)
+                    {
+                        foreach (var sec in secrets)
+                        {
+                            if (!results.Any(r => r.ClientId == cid && r.ClientSecret == sec))
+                            {
+                                results.Add((cid, sec));
+                            }
+                        }
+                    }
+
+                    if (results.Count > 0) break;
+                }
+                catch { }
+            }
+        }
+
+        return results;
+    }
+
+    private void PersistRefreshedTokens()
+    {
+        if (OperatingSystem.IsWindows() && !string.IsNullOrEmpty(_cachedAccessToken))
+        {
+            try
+            {
+                var tokenDict = new Dictionary<string, object>
+                {
+                    ["access_token"] = _cachedAccessToken,
+                    ["token_type"] = "Bearer"
+                };
+                if (!string.IsNullOrEmpty(_cachedRefreshToken))
+                {
+                    tokenDict["refresh_token"] = _cachedRefreshToken;
+                }
+                tokenDict["expiry"] = DateTime.UtcNow.AddHours(1).ToString("o");
+
+                var rootDict = new Dictionary<string, object>
+                {
+                    ["token"] = tokenDict,
+                    ["auth_method"] = "oauth"
+                };
+
+                string json = JsonSerializer.Serialize(rootDict);
+                Win32CredMan.WriteCredential("gemini:antigravity", json);
+            }
+            catch { }
+        }
+    }
+
+    private static string? ExtractEmailFromJwt(string jwt)
+    {
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length >= 2)
+            {
+                string payload = parts[1];
+                payload = payload.Replace('-', '+').Replace('_', '/');
+                switch (payload.Length % 4)
+                {
+                    case 2: payload += "=="; break;
+                    case 3: payload += "="; break;
+                }
+                byte[] bytes = Convert.FromBase64String(payload);
+                using var doc = JsonDocument.Parse(bytes);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("email", out var emailProp))
+                {
+                    return emailProp.GetString();
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 
     private static string? ExtractProjectId(JsonElement root)
