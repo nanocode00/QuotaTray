@@ -9,6 +9,9 @@ jobs:
   build:
     name: Build & Package (${{ matrix.target.os }})
     runs-on: ${{ matrix.target.runner }}
+    env:
+      ANTIGRAVITY_OAUTH_CLIENT_ID: ${{ vars.ANTIGRAVITY_OAUTH_CLIENT_ID }}
+      ANTIGRAVITY_OAUTH_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_OAUTH_CLIENT_SECRET }}
     strategy:
       matrix:
         target:
@@ -38,12 +41,31 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish Single-File Executable
+      - name: Validate Antigravity OAuth build configuration
+        shell: pwsh
         run: |
-          dotnet publish QuotaTray.Desktop/QuotaTray.Desktop.csproj -c Release -r ${{ matrix.target.os }} --self-contained true -p:PublishSingleFile=true -o ./out
+          if ([string]::IsNullOrWhiteSpace($env:ANTIGRAVITY_OAUTH_CLIENT_ID)) {
+            throw "Missing repository variable ANTIGRAVITY_OAUTH_CLIENT_ID"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:ANTIGRAVITY_OAUTH_CLIENT_SECRET)) {
+            throw "Missing repository secret ANTIGRAVITY_OAUTH_CLIENT_SECRET"
+          }
+
+      - name: Publish Single-File Executable
+        shell: pwsh
+        run: |
+          dotnet publish QuotaTray.Desktop/QuotaTray.Desktop.csproj `
+            -c Release `
+            -r "${{ matrix.target.os }}" `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:AntigravityOAuthClientId="$env:ANTIGRAVITY_OAUTH_CLIENT_ID" `
+            -p:AntigravityOAuthClientSecret="$env:ANTIGRAVITY_OAUTH_CLIENT_SECRET" `
+            -o ./out
 
       - name: Package Windows Zip
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           Compress-Archive -Path ./out/* -DestinationPath ./${{ matrix.target.artifact_name }}
 
