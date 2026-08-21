@@ -2,17 +2,25 @@
 
 QuotaTray's requirement is that Antigravity quota continues to work when the `agy` process is not running.
 
-QuotaTray may read the installed `agy` executable as a local source of the matching public OAuth client configuration. It does not launch `agy` and it does not require an `agy` background process.
+The user must have signed in to Antigravity/agy successfully at least once so a local refresh token exists. After that, QuotaTray does not need to launch or keep `agy` running.
 
 ## Runtime flow
 
 1. The user signs in to Antigravity/agy normally once.
 2. QuotaTray reads the existing Antigravity credential from Windows Credential Manager or a supported token-file fallback.
 3. QuotaTray uses the current access token while it is valid.
-4. If the access token is rejected, QuotaTray reads the matching OAuth client configuration from the installed `agy` binary and refreshes the session directly with Google's token endpoint.
-5. The refreshed token is kept in QuotaTray memory. QuotaTray does not overwrite the Antigravity-owned `gemini:antigravity` credential.
+4. QuotaTray resolves the public Antigravity installed-app OAuth client metadata automatically. A complete environment override is honored for development, otherwise QuotaTray first checks its own credential cache.
+5. If the cache is empty, QuotaTray reads the public installed-app client metadata from immutable, pinned public Antigravity integration references. The client secret is accepted only when its SHA-256 fingerprint matches the expected value.
+6. The verified public client metadata is cached under QuotaTray's own credential target (`QuotaTray:antigravity-oauth-client`) so normal future runs do not depend on another fetch.
+7. When the access token is rejected, QuotaTray refreshes directly with Google's token endpoint and retries the quota request.
 
-The installed `agy` file may therefore be read when a refresh is needed, but `agy` itself does not need to be running.
+QuotaTray never overwrites the Antigravity-owned `gemini:antigravity` credential. The existing provider's local `agy` discovery remains only as a fallback if canonical bootstrap is unavailable.
+
+## Why the client secret is handled this way
+
+The Antigravity OAuth client is an installed-app/public client. Its client secret ships in public clients and is not a user credential or a confidential server-side secret. However, GitHub secret scanning treats the literal value as a credential, so QuotaTray does not commit it.
+
+Instead, QuotaTray pins public source revisions, verifies the exact client-secret fingerprint, and stores the verified value locally in QuotaTray's own credential store. This avoids manual user configuration while preserving source-repository hygiene.
 
 ## User-facing expectation
 
@@ -22,4 +30,10 @@ Expected flow:
 
 `Antigravity login once -> QuotaTray runs -> agy can be closed -> QuotaTray refreshes independently when needed`
 
-If no compatible local `agy` installation can be found, QuotaTray should report that the OAuth client configuration could not be discovered rather than asking the user to manually enter client metadata.
+A forced diagnostic remains available through:
+
+```powershell
+dotnet run --project .\QuotaTray.TestCli -- refresh-test
+```
+
+A successful probe must report `Direct OAuth refresh: OK` followed by `REFRESH PROBE SUCCESS` while `agy` is not running.
