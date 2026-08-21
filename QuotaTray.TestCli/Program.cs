@@ -21,40 +21,34 @@ class Program
         }
 
         var provider = new AntigravityQuotaProvider();
-        var res = await provider.FetchQuotaAsync();
-        Console.WriteLine($"IsSuccess: {res.IsSuccess}");
-        Console.WriteLine($"AuthStatus: {res.AuthStatus}");
-        Console.WriteLine($"ErrorMessage: {res.ErrorMessage}");
-        Console.WriteLine($"PlanType: {res.PlanType}");
-        Console.WriteLine($"AccountEmail: {res.AccountEmail}");
-        Console.WriteLine($"DetailsSubtitle: {res.DetailsSubtitle}");
-        Console.WriteLine($"PrimaryRemainingPercent: {res.PrimaryRemainingPercent}%");
-        Console.WriteLine($"ResetText: {res.ResetText}");
-        Console.WriteLine($"Windows Count: {res.Windows.Count}");
-        foreach (var w in res.Windows)
-        {
-            Console.WriteLine($" - {w.Name}: {w.RemainingPercent}% (used: {w.UsedPercent}%, reset: {w.FormattedResetIn})");
-        }
-        Console.WriteLine($"Groups Count: {res.Groups.Count}");
-        foreach (var g in res.Groups)
-        {
-            Console.WriteLine($" [Group] {g.GroupName}: {g.PrimaryRemainingPercentText}");
-            foreach (var w in g.Windows)
-            {
-                Console.WriteLine($"   * {w.Name}: {w.RemainingPercent}% ({w.FormattedResetIn})");
-            }
-        }
+        var result = await provider.FetchQuotaAsync();
+        Console.WriteLine($"IsSuccess: {result.IsSuccess}");
+        Console.WriteLine($"AuthStatus: {result.AuthStatus}");
+        Console.WriteLine($"ErrorMessage: {result.ErrorMessage}");
+        Console.WriteLine($"PrimaryRemainingPercent: {result.PrimaryRemainingPercent}%");
+        Console.WriteLine($"ResetText: {result.ResetText}");
     }
 
     private static async Task RunExistingSessionRefreshPocAsync()
     {
         string? clientId = Environment.GetEnvironmentVariable("ANTIGRAVITY_OAUTH_CLIENT_ID");
+        string? clientSecret = Environment.GetEnvironmentVariable("ANTIGRAVITY_OAUTH_CLIENT_SECRET");
+
         if (string.IsNullOrWhiteSpace(clientId))
         {
             Console.WriteLine("Missing ANTIGRAVITY_OAUTH_CLIENT_ID.");
-            Console.WriteLine("Set it locally to the Antigravity desktop OAuth client ID, then rerun this PoC.");
-            Console.WriteLine("This PoC does not use a client secret and does not inspect or launch agy.");
+            Console.WriteLine("The PoC bootstrap could not discover the Antigravity OAuth client ID.");
             Environment.ExitCode = 2;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(clientSecret))
+        {
+            Console.WriteLine("Missing ANTIGRAVITY_OAUTH_CLIENT_SECRET.");
+            Console.WriteLine("Google rejected the previous client-id-only test with 'client_secret is missing'.");
+            Console.WriteLine("For this maintainer-only PoC, provide the OAuth client secret through the local environment.");
+            Console.WriteLine("Do not commit the value to the repository.");
+            Environment.ExitCode = 3;
             return;
         }
 
@@ -63,39 +57,39 @@ class Program
         {
             Console.WriteLine("Could not find an existing Antigravity credential.");
             Console.WriteLine("Sign in to Antigravity/agy once, then rerun this PoC.");
-            Environment.ExitCode = 3;
+            Environment.ExitCode = 4;
             return;
         }
 
-        var tokens = ExtractTokens(credentialJson);
-        if (string.IsNullOrWhiteSpace(tokens.RefreshToken))
+        string? refreshToken = ExtractRefreshToken(credentialJson);
+        if (string.IsNullOrWhiteSpace(refreshToken))
         {
             Console.WriteLine("Existing Antigravity credential was found, but it did not contain a refresh_token.");
-            Environment.ExitCode = 4;
+            Environment.ExitCode = 5;
             return;
         }
 
         Console.WriteLine("Existing-session refresh PoC");
         Console.WriteLine("Credential source: existing Antigravity login");
         Console.WriteLine("agy process: NOT used");
-        Console.WriteLine("agy executable: NOT inspected");
-        Console.WriteLine("OAuth client secret: NOT used");
+        Console.WriteLine("OAuth client ID: auto-discovered for PoC bootstrap");
+        Console.WriteLine("OAuth client secret: supplied locally; never printed");
         Console.WriteLine("Access/refresh tokens: never printed");
         Console.WriteLine();
 
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-        string? refreshedAccessToken = await RefreshAccessTokenAsync(http, clientId, tokens.RefreshToken);
-        if (string.IsNullOrWhiteSpace(refreshedAccessToken))
+        string? accessToken = await RefreshAccessTokenAsync(http, clientId, clientSecret, refreshToken);
+        if (string.IsNullOrWhiteSpace(accessToken))
         {
             Console.WriteLine();
-            Console.WriteLine("POC FAILED: Google did not accept refresh_token + client_id without a client_secret.");
-            Environment.ExitCode = 5;
+            Console.WriteLine("POC FAILED: Google did not accept the existing Antigravity refresh session.");
+            Environment.ExitCode = 6;
             return;
         }
 
-        Console.WriteLine("Refresh: OK (client secret not used)");
+        Console.WriteLine("Refresh: OK");
 
-        var loadResult = await CallLoadCodeAssistAsync(http, refreshedAccessToken);
+        var loadResult = await CallLoadCodeAssistAsync(http, accessToken);
         Console.WriteLine($"loadCodeAssist: HTTP {(int)loadResult.StatusCode} {loadResult.StatusCode}");
         if (loadResult.StatusCode != HttpStatusCode.OK || string.IsNullOrWhiteSpace(loadResult.ProjectId))
         {
@@ -106,13 +100,13 @@ class Program
 
             Console.WriteLine();
             Console.WriteLine("POC PARTIAL: refresh worked, but Cloud Code Assist did not accept/resolve the refreshed session.");
-            Environment.ExitCode = 6;
+            Environment.ExitCode = 7;
             return;
         }
 
         Console.WriteLine("loadCodeAssist project discovery: OK");
 
-        var quotaResult = await CallQuotaSummaryAsync(http, refreshedAccessToken, loadResult.ProjectId);
+        var quotaResult = await CallQuotaSummaryAsync(http, accessToken, loadResult.ProjectId);
         Console.WriteLine($"retrieveUserQuotaSummary: HTTP {(int)quotaResult.StatusCode} {quotaResult.StatusCode}");
         if (quotaResult.StatusCode != HttpStatusCode.OK)
         {
@@ -120,13 +114,12 @@ class Program
             {
                 Console.WriteLine($"Response: {quotaResult.ErrorSnippet}");
             }
-
-            Environment.ExitCode = 7;
+            Environment.ExitCode = 8;
             return;
         }
 
         Console.WriteLine();
-        Console.WriteLine("POC SUCCESS: an existing Antigravity login can be refreshed and queried by QuotaTray using only refresh_token + client_id, with no agy process/binary dependency and no client secret.");
+        Console.WriteLine("POC SUCCESS: QuotaTray can refresh and query an existing Antigravity session without running agy.");
     }
 
     private static string? TryLoadAntigravityCredential()
@@ -171,15 +164,11 @@ class Program
     {
         const string prefix = "go-keyring-base64:";
         string trimmed = raw.Trim();
-        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return trimmed;
-        }
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return trimmed;
 
-        string encoded = trimmed[prefix.Length..].Trim();
         try
         {
-            return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            return Encoding.UTF8.GetString(Convert.FromBase64String(trimmed[prefix.Length..].Trim()));
         }
         catch
         {
@@ -187,33 +176,28 @@ class Program
         }
     }
 
-    private static (string? AccessToken, string? RefreshToken) ExtractTokens(string json)
+    private static string? ExtractRefreshToken(string json)
     {
         try
         {
             using var doc = JsonDocument.Parse(json);
             JsonElement root = doc.RootElement;
 
-            string? accessToken = ReadString(root, "access_token");
             string? refreshToken = ReadString(root, "refresh_token");
-
             if (root.TryGetProperty("token", out var token) && token.ValueKind == JsonValueKind.Object)
             {
-                accessToken ??= ReadString(token, "access_token");
                 refreshToken ??= ReadString(token, "refresh_token");
             }
-
             if (root.TryGetProperty("oauth", out var oauth) && oauth.ValueKind == JsonValueKind.Object)
             {
-                accessToken ??= ReadString(oauth, "access_token");
                 refreshToken ??= ReadString(oauth, "refresh_token");
             }
 
-            return (accessToken, refreshToken);
+            return refreshToken;
         }
         catch
         {
-            return (null, null);
+            return null;
         }
     }
 
@@ -224,7 +208,11 @@ class Program
             : null;
     }
 
-    private static async Task<string?> RefreshAccessTokenAsync(HttpClient http, string clientId, string refreshToken)
+    private static async Task<string?> RefreshAccessTokenAsync(
+        HttpClient http,
+        string clientId,
+        string clientSecret,
+        string refreshToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://oauth2.googleapis.com/token")
         {
@@ -232,6 +220,7 @@ class Program
             {
                 ["grant_type"] = "refresh_token",
                 ["client_id"] = clientId,
+                ["client_secret"] = clientSecret,
                 ["refresh_token"] = refreshToken
             })
         };
@@ -246,13 +235,9 @@ class Program
         }
 
         using var doc = JsonDocument.Parse(body);
-        if (!doc.RootElement.TryGetProperty("access_token", out var accessTokenProp))
-        {
-            Console.WriteLine("Refresh response did not contain access_token.");
-            return null;
-        }
-
-        return accessTokenProp.GetString();
+        return doc.RootElement.TryGetProperty("access_token", out var accessTokenProp)
+            ? accessTokenProp.GetString()
+            : null;
     }
 
     private static async Task<(HttpStatusCode StatusCode, string? ProjectId, string? ErrorSnippet)> CallLoadCodeAssistAsync(
