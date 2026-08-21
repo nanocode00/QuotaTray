@@ -1,5 +1,8 @@
 using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Reflection;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using QuotaTray.Core.Models;
@@ -29,9 +32,117 @@ class Program
             return;
         }
 
+        if (args.Length > 0 && args[0].Equals("copilot-ai-credit", StringComparison.OrdinalIgnoreCase))
+        {
+            await RunCopilotAiCreditProbeAsync();
+            return;
+        }
+
         var provider = new AntigravityQuotaProvider();
         ProviderQuotaResult res = await provider.FetchQuotaAsync();
         PrintResult(res);
+    }
+
+    private static async Task RunCopilotAiCreditProbeAsync()
+    {
+        Console.WriteLine("GitHub Copilot AI credit API probe");
+        Console.WriteLine("This uses QuotaTray's own GitHub credential discovery. The token is never printed.");
+        Console.WriteLine();
+
+        var provider = new CopilotQuotaProvider();
+        ProviderQuotaResult providerResult = await provider.FetchQuotaAsync();
+        if (!providerResult.IsSuccess || string.IsNullOrWhiteSpace(providerResult.AccountEmail))
+        {
+            Console.WriteLine("AI CREDIT PROBE FAILED: QuotaTray could not resolve an authenticated GitHub login first.");
+            PrintResult(providerResult);
+            Environment.ExitCode = 6;
+            return;
+        }
+
+        MethodInfo? loadCredentials = typeof(CopilotQuotaProvider).GetMethod(
+            "LoadCredentials",
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        if (loadCredentials == null)
+        {
+            Console.WriteLine("AI CREDIT PROBE FAILED: provider credential loader changed; update the diagnostic probe.");
+            Environment.ExitCode = 7;
+            return;
+        }
+
+        string? token = loadCredentials.Invoke(null, null) as string;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            Console.WriteLine("AI CREDIT PROBE FAILED: QuotaTray did not discover a GitHub token.");
+            Environment.ExitCode = 8;
+            return;
+        }
+
+        string login = providerResult.AccountEmail;
+        string url = $"https://api.github.com/users/{Uri.EscapeDataString(login)}/settings/billing/ai_credit/usage";
+
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2026-03-10");
+        request.Headers.TryAddWithoutValidation("User-Agent", "QuotaTray-TestCli/1.0");
+
+        using HttpResponseMessage response = await httpClient.SendAsync(request);
+        string body = await response.Content.ReadAsStringAsync();
+
+        Console.WriteLine($"HTTP: {(int)response.StatusCode} {response.StatusCode}");
+
+        if (!response.IsSuccessStatusCode)
+        {
+            try
+            {
+                using JsonDocument errorDoc = JsonDocument.Parse(body);
+                if (errorDoc.RootElement.TryGetProperty("message", out JsonElement message))
+                {
+                    Console.WriteLine($"Message: {message.GetString()}");
+                }
+            }
+            catch
+            {
+                Console.WriteLine("Message: non-JSON error response");
+            }
+
+            Console.WriteLine("AI CREDIT PROBE FAILED: QuotaTray's discovered token could not query the AI credit endpoint.");
+            Environment.ExitCode = 9;
+            return;
+        }
+
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        if (root.TryGetProperty("timePeriod", out JsonElement period))
+        {
+            string? year = period.TryGetProperty("year", out JsonElement y) ? y.ToString() : null;
+            string? month = period.TryGetProperty("month", out JsonElement m) ? m.ToString() : null;
+            Console.WriteLine($"TimePeriod: {year}-{month}");
+        }
+
+        if (root.TryGetProperty("user", out JsonElement user))
+        {
+            Console.WriteLine($"User: {user.GetString()}");
+        }
+
+        if (root.TryGetProperty("usageItems", out JsonElement usageItems) && usageItems.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine($"UsageItems Count: {usageItems.GetArrayLength()}");
+            if (usageItems.GetArrayLength() > 0)
+            {
+                Console.WriteLine("UsageItems:");
+                foreach (JsonElement item in usageItems.EnumerateArray())
+                {
+                    Console.WriteLine($" - {item.GetRawText()}");
+                }
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("AI CREDIT PROBE SUCCESS: QuotaTray's own discovered GitHub token can query the AI credit endpoint.");
     }
 
     private static async Task RunForcedRefreshProbeAsync()
