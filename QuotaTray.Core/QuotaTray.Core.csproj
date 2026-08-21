@@ -12,20 +12,6 @@
     <Description>Core library for AI Quota &amp; Rate Limit Monitoring</Description>
   </PropertyGroup>
 
-  <ItemGroup Condition="'$(AntigravityOAuthClientId)' != ''">
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-      <_Parameter1>AntigravityOAuthClientId</_Parameter1>
-      <_Parameter2>$(AntigravityOAuthClientId)</_Parameter2>
-    </AssemblyAttribute>
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(AntigravityOAuthClientSecret)' != ''">
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-      <_Parameter1>AntigravityOAuthClientSecret</_Parameter1>
-      <_Parameter2>$(AntigravityOAuthClientSecret)</_Parameter2>
-    </AssemblyAttribute>
-  </ItemGroup>
-
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
