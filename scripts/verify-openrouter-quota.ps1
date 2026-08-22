@@ -76,6 +76,56 @@ function Write-Field {
     }
 }
 
+function Write-AnalyticsMetaList {
+    param(
+        [string]$Name,
+        $Value
+    )
+
+    if ($null -eq $Value) {
+        Write-Host ('- {0}: <not returned>' -f $Name)
+        return
+    }
+
+    $entries = @($Value)
+    if ($entries.Count -eq 0) {
+        Write-Host ('- {0}: <empty>' -f $Name)
+        return
+    }
+
+    $labels = foreach ($entry in $entries) {
+        if ($null -eq $entry) { continue }
+
+        if ($entry -is [string] -or $entry -is [ValueType]) {
+            [string]$entry
+            continue
+        }
+
+        $preferred = @('name', 'id', 'key', 'value', 'metric', 'dimension', 'granularity')
+        $label = $null
+        foreach ($propertyName in $preferred) {
+            $property = $entry.PSObject.Properties[$propertyName]
+            if ($null -ne $property -and $null -ne $property.Value -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                $label = [string]$property.Value
+                break
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($label)) {
+            $label = ($entry | ConvertTo-Json -Compress -Depth 5)
+        }
+        $label
+    }
+
+    if ($labels.Count -gt 50) {
+        $visible = $labels | Select-Object -First 50
+        Write-Host ('- {0} ({1}): {2}, ...' -f $Name, $labels.Count, ($visible -join ', '))
+    }
+    else {
+        Write-Host ('- {0} ({1}): {2}' -f $Name, $labels.Count, ($labels -join ', '))
+    }
+}
+
 $apiKey = $env:OPENROUTER_API_KEY
 if ([string]::IsNullOrWhiteSpace($apiKey)) {
     $secureApiKey = Read-Host 'OpenRouter API key' -AsSecureString
@@ -165,18 +215,14 @@ try {
             $analyticsJson = Read-JsonSafe $analyticsResponse.Body
             Write-Host '[PASS] Analytics API is accessible with the Management Key.'
 
-            if ($null -ne $analyticsJson) {
-                $propertyNames = @($analyticsJson.PSObject.Properties.Name)
-                if ($propertyNames.Count -gt 0) {
-                    Write-Host ('- top-level fields: {0}' -f ($propertyNames -join ', '))
-                }
-
-                if ($null -ne $analyticsJson.data) {
-                    $dataFields = @($analyticsJson.data.PSObject.Properties.Name)
-                    if ($dataFields.Count -gt 0) {
-                        Write-Host ('- data fields: {0}' -f ($dataFields -join ', '))
-                    }
-                }
+            if ($null -ne $analyticsJson -and $null -ne $analyticsJson.data) {
+                Write-AnalyticsMetaList 'metrics' $analyticsJson.data.metrics
+                Write-AnalyticsMetaList 'dimensions' $analyticsJson.data.dimensions
+                Write-AnalyticsMetaList 'operators' $analyticsJson.data.operators
+                Write-AnalyticsMetaList 'granularities' $analyticsJson.data.granularities
+            }
+            else {
+                Write-Host '[WARN] Analytics metadata response has no data object.'
             }
         }
         elseif ($analyticsResponse.StatusCode -eq 401 -or $analyticsResponse.StatusCode -eq 403) {
