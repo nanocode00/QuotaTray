@@ -237,6 +237,28 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+
+                        <!-- OpenRouter optional analytics credential -->
+                        <Border Margin="0,4,0,6" Padding="10,9" Background="#1C1F2A" BorderBrush="#2D3346" BorderThickness="1" CornerRadius="10">
+                            <StackPanel Orientation="Vertical">
+                                <TextBlock Text="OpenRouter Analytics" FontSize="12" FontWeight="SemiBold" Foreground="#F1F5F9"/>
+                                <TextBlock Text="무료 모델 사용량 조회용 Management Key (선택)" FontSize="10" Foreground="#94A3B8" Margin="0,2,0,6"/>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBox x:Name="OpenRouterManagementKeyBox"
+                                             Grid.Column="0"
+                                             PasswordChar="•"
+                                             Watermark="Management Key"
+                                             Classes="modernTextBox"
+                                             Margin="0,0,6,0"/>
+                                    <Button Grid.Column="1"
+                                            Classes="pillButton"
+                                            Click="SaveOpenRouterManagementKey_Click">
+                                        <TextBlock Text="저장" FontSize="10"/>
+                                    </Button>
+                                </Grid>
+                                <TextBlock Text="일반 API Key와 별도로 암호화 저장되며 Analytics 조회에만 사용됩니다." FontSize="9" Foreground="#64748B" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
