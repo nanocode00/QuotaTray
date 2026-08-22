@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -21,7 +23,8 @@ public class OpenRouterQuotaProvider : IQuotaProvider
     public bool RequiresApiKey => true;
 
     private const string CreditsUrl = "https://openrouter.ai/api/v1/credits";
-    private const string AuthKeyUrl = "https://openrouter.ai/api/v1/auth/key";
+    private const string KeyUrl = "https://openrouter.ai/api/v1/key";
+
     private readonly HttpClient _httpClient;
     private string? _customApiKey;
 
@@ -47,17 +50,16 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             AuthMethod = AuthMethod,
             CliLoginCommand = CliLoginCommand,
             RequiresApiKey = RequiresApiKey,
-            IsBalanceProvider = true,
             FetchedAt = DateTimeOffset.UtcNow
         };
 
         try
         {
-            string? key = !string.IsNullOrEmpty(_customApiKey)
+            string? key = !string.IsNullOrWhiteSpace(_customApiKey)
                 ? _customApiKey
                 : Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
 
-            if (string.IsNullOrEmpty(key))
+            if (string.IsNullOrWhiteSpace(key))
             {
                 result.IsSuccess = false;
                 result.IsAuthMissing = true;
@@ -66,133 +68,119 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                 return result;
             }
 
-            using var reqCredits = new HttpRequestMessage(HttpMethod.Get, CreditsUrl);
-            reqCredits.Headers.Add("Authorization", $"Bearer {key}");
+            // /key is the authoritative source for the current API key's tier, usage,
+            // spending limit, reset cadence, and expiry. If this endpoint fails, the key
+            // itself cannot be considered healthy even if account credits are available.
+            using var keyRequest = CreateAuthorizedGet(KeyUrl, key);
+            using var keyResponse = await _httpClient.SendAsync(keyRequest, cancellationToken);
 
-            var respCredits = await _httpClient.SendAsync(reqCredits, cancellationToken);
-            if (!respCredits.IsSuccessStatusCode)
+            if (!keyResponse.IsSuccessStatusCode)
             {
                 result.IsSuccess = false;
-                result.IsAuthMissing = respCredits.StatusCode == System.Net.HttpStatusCode.Unauthorized;
-                result.AuthStatus = respCredits.StatusCode == System.Net.HttpStatusCode.Unauthorized ? ProviderAuthStatus.Expired : ProviderAuthStatus.Error;
-                result.ErrorMessage = $"API Error ({(int)respCredits.StatusCode})";
+                result.IsAuthMissing = keyResponse.StatusCode == HttpStatusCode.Unauthorized;
+                result.AuthStatus = keyResponse.StatusCode == HttpStatusCode.Unauthorized
+                    ? ProviderAuthStatus.Expired
+                    : ProviderAuthStatus.Error;
+                result.ErrorMessage = $"API Error ({(int)keyResponse.StatusCode})";
                 return result;
             }
 
-            string jsonCredits = await respCredits.Content.ReadAsStringAsync(cancellationToken);
-            using var docCredits = JsonDocument.Parse(jsonCredits);
-            var rootCredits = docCredits.RootElement;
+            string keyJson = await keyResponse.Content.ReadAsStringAsync(cancellationToken);
+            var keyInfo = ParseKeyInfo(keyJson);
 
-            double totalCredits = 0;
-            double totalUsage = 0;
-            double balance = 0;
-
-            if (rootCredits.TryGetProperty("data", out var dataProp))
+            result.PlanType = keyInfo.IsFreeTier switch
             {
-                totalCredits = dataProp.TryGetProperty("total_credits", out var tc) ? tc.GetDouble() : 0.0;
-                totalUsage = dataProp.TryGetProperty("total_usage", out var tu) ? tu.GetDouble() : 0.0;
-                balance = Math.Max(0.0, totalCredits - totalUsage);
+                true => "Free",
+                false => "PAYG",
+                _ => "OpenRouter"
+            };
 
-                result.BalanceAmount = balance;
+            // Account credits are useful when available, but are not required for a valid
+            // OpenRouter API key. Treat this as an optional enrichment so users whose keys
+            // cannot access /credits still get usage and key-limit information.
+            var creditsInfo = await TryFetchCreditsAsync(key, cancellationToken);
+            if (creditsInfo != null)
+            {
+                result.IsBalanceProvider = true;
+                result.BalanceAmount = creditsInfo.Balance;
                 result.BalanceCurrency = "$";
-                result.BalanceFormatted = $"${balance:F2}";
+                result.BalanceFormatted = $"${creditsInfo.Balance:F2}";
             }
 
-            // Optional: Query /auth/key or /key for tier and key limit details
-            bool isFreeTier = totalCredits < 10.0;
-            double? keyLimit = null;
-            double? keyUsage = null;
-            double? keyLimitRemaining = null;
-            string? keyResetStr = null;
-
-            try
-            {
-                using var reqAuth = new HttpRequestMessage(HttpMethod.Get, AuthKeyUrl);
-                reqAuth.Headers.Add("Authorization", $"Bearer {key}");
-                var respAuth = await _httpClient.SendAsync(reqAuth, cancellationToken);
-                if (respAuth.IsSuccessStatusCode)
-                {
-                    string jsonAuth = await respAuth.Content.ReadAsStringAsync(cancellationToken);
-                    using var docAuth = JsonDocument.Parse(jsonAuth);
-                    if (docAuth.RootElement.TryGetProperty("data", out var authData))
-                    {
-                        if (authData.TryGetProperty("is_free_tier", out var ft))
-                        {
-                            isFreeTier = ft.GetBoolean();
-                        }
-                        if (authData.TryGetProperty("limit", out var lim) && lim.ValueKind == JsonValueKind.Number)
-                        {
-                            keyLimit = lim.GetDouble();
-                        }
-                        if (authData.TryGetProperty("usage", out var usg) && usg.ValueKind == JsonValueKind.Number)
-                        {
-                            keyUsage = usg.GetDouble();
-                        }
-                        if (authData.TryGetProperty("limit_remaining", out var rem) && rem.ValueKind == JsonValueKind.Number)
-                        {
-                            keyLimitRemaining = rem.GetDouble();
-                        }
-                        if (authData.TryGetProperty("limit_reset", out var lReset) && lReset.ValueKind == JsonValueKind.String)
-                        {
-                            if (DateTimeOffset.TryParse(lReset.GetString(), out var resetDto))
-                            {
-                                long diff = Math.Max(0, (long)(resetDto - DateTimeOffset.UtcNow).TotalSeconds);
-                                keyResetStr = TimeFormatter.FormatResetText(diff);
-                            }
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            // Badge: Free or PAYG
-            bool isPayg = !isFreeTier || totalCredits >= 10.0;
-            result.PlanType = isPayg ? "PAYG" : "Free";
-            result.DetailsSubtitle = $"Usage: ${totalUsage:F2} · Total: ${totalCredits:F2}";
-
-            // Construct Windows (Progress Bars & Entitlements)
             var windows = new List<QuotaWindow>();
 
-            // 1. Account Credits Window
-            double balancePct = totalCredits > 0 ? Math.Max(0.0, Math.Min(100.0, (balance / totalCredits) * 100.0)) : (balance > 0 ? 100.0 : 0.0);
-            windows.Add(new QuotaWindow
+            if (creditsInfo != null)
             {
-                Name = totalCredits > 0 ? $"Credits (${balance:F2} / ${totalCredits:F2})" : $"Credits (${balance:F2})",
-                UsedPercent = Math.Max(0.0, 100.0 - balancePct),
-                RemainingPercent = balancePct,
-                FormattedResetIn = $"Used ${totalUsage:F2}"
-            });
+                double balancePct = creditsInfo.TotalCredits > 0
+                    ? ClampPercent((creditsInfo.Balance / creditsInfo.TotalCredits) * 100.0)
+                    : creditsInfo.Balance > 0 ? 100.0 : 0.0;
 
-            // 2. Free Models Entitlement (50/day or 1,000/day)
-            string freeModelsDaily = isPayg ? "1,000/day" : "50/day";
-            windows.Add(new QuotaWindow
-            {
-                Name = $"Free models: {freeModelsDaily}",
-                UsedPercent = 0.0,
-                RemainingPercent = 100.0,
-                FormattedResetIn = isPayg ? "누적 $10+ 계정" : "기본 무료 한도"
-            });
-
-            // 3. Key Limit Window (if key has spending limit)
-            if (keyLimit.HasValue && keyLimit.Value > 0)
-            {
-                double ku = keyUsage ?? 0.0;
-                double remKey = keyLimitRemaining ?? Math.Max(0.0, keyLimit.Value - ku);
-                double remPct = Math.Max(0.0, Math.Min(100.0, (remKey / keyLimit.Value) * 100.0));
                 windows.Add(new QuotaWindow
                 {
-                    Name = $"Key limit (${remKey:F2} / ${keyLimit.Value:F2})",
-                    UsedPercent = Math.Max(0.0, 100.0 - remPct),
-                    RemainingPercent = remPct,
-                    FormattedResetIn = !string.IsNullOrEmpty(keyResetStr) ? keyResetStr : $"Used ${ku:F2}"
+                    Name = creditsInfo.TotalCredits > 0
+                        ? $"Credits (${creditsInfo.Balance:F2} / ${creditsInfo.TotalCredits:F2})"
+                        : $"Credits (${creditsInfo.Balance:F2})",
+                    UsedPercent = ClampPercent(100.0 - balancePct),
+                    RemainingPercent = balancePct,
+                    FormattedResetIn = $"Used ${creditsInfo.TotalUsage:F2}"
                 });
+
+                result.PrimaryRemainingPercent = balancePct;
+                result.ResetText = $"${creditsInfo.TotalUsage:F2} used";
+                result.FormattedNextResetIn = result.ResetText;
+            }
+
+            // A spending limit is a real quota and can be represented as a progress bar.
+            // Free-model request entitlements are policy information, not a live counter,
+            // so they are deliberately not added as synthetic 100% windows.
+            if (keyInfo.Limit is > 0)
+            {
+                double usage = keyInfo.Usage ?? 0.0;
+                double remaining = keyInfo.LimitRemaining
+                    ?? Math.Max(0.0, keyInfo.Limit.Value - usage);
+                double remainingPct = ClampPercent((remaining / keyInfo.Limit.Value) * 100.0);
+
+                windows.Add(new QuotaWindow
+                {
+                    Name = $"Key limit (${remaining:F2} / ${keyInfo.Limit.Value:F2})",
+                    UsedPercent = ClampPercent(100.0 - remainingPct),
+                    RemainingPercent = remainingPct,
+                    FormattedResetIn = FormatLimitReset(keyInfo.LimitReset, usage)
+                });
+
+                if (creditsInfo == null)
+                {
+                    result.PrimaryRemainingPercent = remainingPct;
+                    result.ResetText = windows[^1].FormattedResetIn;
+                    result.FormattedNextResetIn = windows[^1].FormattedResetIn;
+                }
             }
 
             result.Windows = windows;
 
-            result.PrimaryRemainingPercent = balancePct;
-            result.ResetText = $"${totalUsage:F2} used";
-            result.FormattedNextResetIn = result.ResetText;
+            string freeModelAllowance = keyInfo.IsFreeTier switch
+            {
+                true => "Free models 50/day · 20 RPM",
+                false => "Free models 1,000/day · 20 RPM",
+                _ => "Free-model allowance unavailable"
+            };
+
+            string monthlyUsage = keyInfo.UsageMonthly.HasValue
+                ? $"Month {FormatUsd(keyInfo.UsageMonthly.Value)}"
+                : keyInfo.Usage.HasValue
+                    ? $"Usage {FormatUsd(keyInfo.Usage.Value)}"
+                    : "Usage unavailable";
+
+            result.DetailsSubtitle = $"{monthlyUsage} · {freeModelAllowance}";
+
+            if (creditsInfo == null && keyInfo.Limit is not > 0)
+            {
+                // There is no percentage-based quota to summarize. Keep the neutral 100
+                // internally; the desktop view renders this OpenRouter state as "Active".
+                result.PrimaryRemainingPercent = 100.0;
+                result.ResetText = keyInfo.Usage.HasValue ? $"{FormatUsd(keyInfo.Usage.Value)} used" : "Active";
+                result.FormattedNextResetIn = result.ResetText;
+            }
 
             result.AuthStatus = ProviderAuthStatus.Connected;
             result.IsSuccess = true;
@@ -212,5 +200,192 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             result.ErrorMessage = ex.Message;
             return result;
         }
+    }
+
+    private HttpRequestMessage CreateAuthorizedGet(string url, string key)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {key}");
+        return request;
+    }
+
+    private async Task<OpenRouterCreditsInfo?> TryFetchCreditsAsync(string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = CreateAuthorizedGet(CreditsUrl, key);
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            string json = await response.Content.ReadAsStringAsync(cancellationToken);
+            return ParseCreditsInfo(json);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static OpenRouterKeyInfo ParseKeyInfo(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+        {
+            return new OpenRouterKeyInfo();
+        }
+
+        return new OpenRouterKeyInfo
+        {
+            IsFreeTier = TryGetBoolean(data, "is_free_tier"),
+            Limit = TryGetDouble(data, "limit"),
+            LimitRemaining = TryGetDouble(data, "limit_remaining"),
+            LimitReset = TryGetString(data, "limit_reset"),
+            Usage = TryGetDouble(data, "usage"),
+            UsageDaily = TryGetDouble(data, "usage_daily"),
+            UsageWeekly = TryGetDouble(data, "usage_weekly"),
+            UsageMonthly = TryGetDouble(data, "usage_monthly"),
+            ExpiresAt = TryGetString(data, "expires_at")
+        };
+    }
+
+    private static OpenRouterCreditsInfo? ParseCreditsInfo(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        double? totalCredits = TryGetDouble(data, "total_credits");
+        double? totalUsage = TryGetDouble(data, "total_usage");
+        if (!totalCredits.HasValue && !totalUsage.HasValue)
+        {
+            return null;
+        }
+
+        double credits = Math.Max(0.0, totalCredits ?? 0.0);
+        double usage = Math.Max(0.0, totalUsage ?? 0.0);
+        return new OpenRouterCreditsInfo
+        {
+            TotalCredits = credits,
+            TotalUsage = usage,
+            Balance = Math.Max(0.0, credits - usage)
+        };
+    }
+
+    private static string FormatLimitReset(string? reset, double usage)
+    {
+        if (string.IsNullOrWhiteSpace(reset))
+        {
+            return $"Used ${usage:F2}";
+        }
+
+        string normalized = reset.Trim().ToLowerInvariant();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset? nextReset = normalized switch
+        {
+            "daily" => new DateTimeOffset(now.UtcDateTime.Date.AddDays(1), TimeSpan.Zero),
+            "weekly" => NextWeeklyReset(now),
+            "monthly" => new DateTimeOffset(new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(1)),
+            _ => null
+        };
+
+        if (nextReset.HasValue)
+        {
+            long seconds = Math.Max(0, (long)(nextReset.Value - now).TotalSeconds);
+            return TimeFormatter.FormatResetText(seconds);
+        }
+
+        if (DateTimeOffset.TryParse(reset, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedReset))
+        {
+            long seconds = Math.Max(0, (long)(parsedReset - now).TotalSeconds);
+            return TimeFormatter.FormatResetText(seconds);
+        }
+
+        return $"Reset {reset}";
+    }
+
+    private static DateTimeOffset NextWeeklyReset(DateTimeOffset now)
+    {
+        int daysUntilMonday = ((int)DayOfWeek.Monday - (int)now.DayOfWeek + 7) % 7;
+        if (daysUntilMonday == 0)
+        {
+            daysUntilMonday = 7;
+        }
+
+        return new DateTimeOffset(now.UtcDateTime.Date.AddDays(daysUntilMonday), TimeSpan.Zero);
+    }
+
+    private static double ClampPercent(double value) => Math.Max(0.0, Math.Min(100.0, value));
+
+    private static string FormatUsd(double value)
+    {
+        if (value > 0 && value < 0.01)
+        {
+            return $"${value:F4}";
+        }
+        return $"${value:F2}";
+    }
+
+    private static double? TryGetDouble(JsonElement parent, string propertyName)
+    {
+        if (parent.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.Number &&
+            property.TryGetDouble(out double value))
+        {
+            return value;
+        }
+        return null;
+    }
+
+    private static bool? TryGetBoolean(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null
+        };
+    }
+
+    private static string? TryGetString(JsonElement parent, string propertyName)
+    {
+        if (parent.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
+        {
+            return property.GetString();
+        }
+        return null;
+    }
+
+    private sealed class OpenRouterKeyInfo
+    {
+        public bool? IsFreeTier { get; init; }
+        public double? Limit { get; init; }
+        public double? LimitRemaining { get; init; }
+        public string? LimitReset { get; init; }
+        public double? Usage { get; init; }
+        public double? UsageDaily { get; init; }
+        public double? UsageWeekly { get; init; }
+        public double? UsageMonthly { get; init; }
+        public string? ExpiresAt { get; init; }
+    }
+
+    private sealed class OpenRouterCreditsInfo
+    {
+        public double TotalCredits { get; init; }
+        public double TotalUsage { get; init; }
+        public double Balance { get; init; }
     }
 }
