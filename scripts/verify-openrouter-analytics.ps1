@@ -122,10 +122,23 @@ function Invoke-AnalyticsRange {
     Write-Host ''
     Write-Host 'SANITIZED AGGREGATE DATA'
     Write-Host 'Only the requested date/model/variant/request_count aggregates are shown below.'
-    $json.data | ConvertTo-Json -Depth 10
 
     if ($rowCount -eq 0) {
         Write-Host '[INFO] No requests were recorded in this range.'
+    }
+    else {
+        $rows = if ($null -ne $json.data.data) { @($json.data.data) } else { @($json.data) }
+        $sanitizedRows = foreach ($row in $rows) {
+            [ordered]@{
+                date = if ($null -ne $row.date) { $row.date } elseif ($null -ne $row.timestamp) { $row.timestamp } else { $null }
+                model = $row.model
+                variant = $row.variant
+                request_count = $row.request_count
+            }
+        }
+
+        $sanitizedJson = $sanitizedRows | ConvertTo-Json -Depth 6
+        Write-Host $sanitizedJson
     }
 
     Write-Host ''
