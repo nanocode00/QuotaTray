@@ -82,13 +82,13 @@ internal static class Program
         Expect(result.BalanceAmount.HasValue && Math.Abs(result.BalanceAmount.Value - 9.99759183) < 0.000001,
             $"unexpected balance {result.BalanceAmount}");
         Expect(result.BalanceFormatted == "$10.00", $"unexpected formatted balance {result.BalanceFormatted}");
-        Expect(result.DetailsSubtitle.Contains("1k/day", StringComparison.Ordinal), "PAYG free-model allowance missing");
-        Expect(result.DetailsSubtitle.Contains("$0.0024", StringComparison.Ordinal), "small monthly usage should retain precision");
+        Expect(result.DetailsSubtitle == "Free 1k/day · 20 RPM",
+            $"entitlement should occupy its own subtitle line: {result.DetailsSubtitle}");
         Expect(result.Windows.Count == 1, $"expected only credits window, got {result.Windows.Count}");
         Expect(result.Windows[0].Name.Contains("$9.9976", StringComparison.Ordinal),
             $"remaining credits should retain precision: {result.Windows[0].Name}");
-        Expect(result.Windows[0].FormattedResetIn.Contains("$0.0024", StringComparison.Ordinal),
-            $"small total usage should retain precision: {result.Windows[0].FormattedResetIn}");
+        Expect(result.Windows[0].FormattedResetIn.Contains("Month $0.0024 used", StringComparison.Ordinal),
+            $"monthly usage should be separated onto the credits row: {result.Windows[0].FormattedResetIn}");
         Expect(result.Windows.All(w => !w.Name.Contains("Free models", StringComparison.OrdinalIgnoreCase)),
             "synthetic free-model progress bar was created");
     }
@@ -118,7 +118,8 @@ internal static class Program
         Expect(result.PlanType == "Free", $"expected Free, got {result.PlanType}");
         Expect(result.IsBalanceProvider, "OpenRouter should retain balance-style card rendering");
         Expect(result.BalanceFormatted == "Active", $"expected Active fallback, got {result.BalanceFormatted}");
-        Expect(result.DetailsSubtitle.Contains("50/day", StringComparison.Ordinal), "free-tier entitlement missing");
+        Expect(result.DetailsSubtitle == "Free 50/day · 20 RPM",
+            $"free-tier entitlement should occupy its own subtitle line: {result.DetailsSubtitle}");
         Expect(result.Windows.Count == 0, "free-model policy must not become a quota window");
     }
 
