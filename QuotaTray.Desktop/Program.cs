@@ -1,12 +1,16 @@
 using System;
+#if DEBUG
 using System.Linq;
+#endif
 using Avalonia;
 
 namespace QuotaTray.Desktop;
 
 internal class Program
 {
+#if DEBUG
     public static bool UseCodexSparkMock { get; private set; }
+#endif
 
     [STAThread]
     public static void Main(string[] args)
