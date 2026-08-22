@@ -104,6 +104,7 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             {
                 result.BalanceAmount = creditsInfo.Balance;
                 result.BalanceCurrency = "$";
+                // Keep the header chip compact; detailed rows preserve sub-cent precision.
                 result.BalanceFormatted = $"${creditsInfo.Balance:F2}";
             }
             else
@@ -124,15 +125,15 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                 windows.Add(new QuotaWindow
                 {
                     Name = creditsInfo.TotalCredits > 0
-                        ? $"Credits (${creditsInfo.Balance:F2} / ${creditsInfo.TotalCredits:F2})"
-                        : $"Credits (${creditsInfo.Balance:F2})",
+                        ? $"Credits ({FormatUsdDetailed(creditsInfo.Balance)} / {FormatUsd(creditsInfo.TotalCredits)})"
+                        : $"Credits ({FormatUsdDetailed(creditsInfo.Balance)})",
                     UsedPercent = ClampPercent(100.0 - balancePct),
                     RemainingPercent = balancePct,
-                    FormattedResetIn = $"Used ${creditsInfo.TotalUsage:F2}"
+                    FormattedResetIn = $"Used {FormatUsdDetailed(creditsInfo.TotalUsage)}"
                 });
 
                 result.PrimaryRemainingPercent = balancePct;
-                result.ResetText = $"${creditsInfo.TotalUsage:F2} used";
+                result.ResetText = $"{FormatUsdDetailed(creditsInfo.TotalUsage)} used";
                 result.FormattedNextResetIn = result.ResetText;
             }
 
@@ -166,9 +167,9 @@ public class OpenRouterQuotaProvider : IQuotaProvider
 
             string freeModelAllowance = keyInfo.IsFreeTier switch
             {
-                true => "Free models 50/day · 20 RPM",
-                false => "Free models 1,000/day · 20 RPM",
-                _ => "Free-model allowance unavailable"
+                true => "Free 50/day · 20 RPM",
+                false => "Free 1k/day · 20 RPM",
+                _ => "Free allowance unavailable"
             };
 
             string monthlyUsage = keyInfo.UsageMonthly.HasValue
@@ -337,6 +338,24 @@ public class OpenRouterQuotaProvider : IQuotaProvider
         {
             return $"${value:F4}";
         }
+        return $"${value:F2}";
+    }
+
+    private static string FormatUsdDetailed(double value)
+    {
+        if (value == 0)
+        {
+            return "$0.00";
+        }
+
+        // Keep up to four decimals when cents would hide a real difference, e.g.
+        // $9.9976 remaining or $0.0024 used, while normal balances stay compact.
+        double roundedCents = Math.Round(value, 2, MidpointRounding.AwayFromZero);
+        if (Math.Abs(value - roundedCents) >= 0.00005)
+        {
+            return $"${value:F4}";
+        }
+
         return $"${value:F2}";
     }
 
