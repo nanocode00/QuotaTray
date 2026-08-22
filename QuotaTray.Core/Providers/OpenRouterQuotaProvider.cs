@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,7 +12,7 @@ using QuotaTray.Core.Utils;
 
 namespace QuotaTray.Core.Providers;
 
-public class OpenRouterQuotaProvider : IQuotaProvider
+public class OpenRouterQuotaProvider : IQuotaProvider, IManagementKeyProvider
 {
     public string ProviderKey => "openrouter";
     public string ProviderTitle => "OpenRouter";
@@ -24,9 +25,11 @@ public class OpenRouterQuotaProvider : IQuotaProvider
 
     private const string CreditsUrl = "https://openrouter.ai/api/v1/credits";
     private const string KeyUrl = "https://openrouter.ai/api/v1/key";
+    private const string AnalyticsQueryUrl = "https://openrouter.ai/api/v1/analytics/query";
 
     private readonly HttpClient _httpClient;
     private string? _customApiKey;
+    private string? _managementKey;
 
     public OpenRouterQuotaProvider(HttpClient? httpClient = null)
     {
@@ -36,6 +39,11 @@ public class OpenRouterQuotaProvider : IQuotaProvider
     public void SetCustomApiKey(string? apiKey)
     {
         _customApiKey = apiKey;
+    }
+
+    public void SetManagementKey(string? managementKey)
+    {
+        _managementKey = managementKey;
     }
 
     public async Task<ProviderQuotaResult> FetchQuotaAsync(CancellationToken cancellationToken = default)
@@ -68,6 +76,10 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                 result.ErrorMessage = "API Key not set. Enter OpenRouter API Key in Settings";
                 return result;
             }
+
+            string? managementKey = !string.IsNullOrWhiteSpace(_managementKey)
+                ? _managementKey
+                : Environment.GetEnvironmentVariable("OPENROUTER_MANAGEMENT_KEY");
 
             // /key is the authoritative source for the current API key's tier, usage,
             // spending limit, reset cadence, and expiry. If this endpoint fails, the key
@@ -146,8 +158,6 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             }
 
             // A spending limit is a real quota and can be represented as a progress bar.
-            // Free-model request entitlements are policy information, not a live counter,
-            // so they are deliberately not added as synthetic 100% windows.
             if (keyInfo.Limit is > 0)
             {
                 double usage = keyInfo.Usage ?? 0.0;
@@ -171,6 +181,31 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                 }
             }
 
+            int? freeDailyLimit = keyInfo.IsFreeTier switch
+            {
+                true => 50,
+                false => 1000,
+                _ => null
+            };
+
+            // Analytics requires a separate Management Key. It is optional: the provider
+            // remains healthy when the key is missing or analytics cannot be queried.
+            long? freeRequestsToday = await TryFetchFreeModelRequestsTodayAsync(managementKey, cancellationToken);
+            if (freeRequestsToday.HasValue && freeDailyLimit.HasValue)
+            {
+                long used = Math.Max(0, freeRequestsToday.Value);
+                long remaining = Math.Max(0, freeDailyLimit.Value - used);
+                double remainingPct = ClampPercent((remaining / (double)freeDailyLimit.Value) * 100.0);
+
+                windows.Add(new QuotaWindow
+                {
+                    Name = $"Free models ({FormatCount(used)} / {FormatCount(freeDailyLimit.Value)} today)",
+                    UsedPercent = ClampPercent(100.0 - remainingPct),
+                    RemainingPercent = remainingPct,
+                    FormattedResetIn = "20 RPM"
+                });
+            }
+
             result.Windows = windows;
 
             string freeModelAllowance = keyInfo.IsFreeTier switch
@@ -180,14 +215,16 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                 _ => "Free allowance unavailable"
             };
 
-            // Entitlement/policy information gets its own line. Monthly usage is shown on
-            // the credits row when available, avoiding a crowded and truncated subtitle.
-            result.DetailsSubtitle = freeModelAllowance;
+            // With analytics available, the daily allowance is visible on its own quota row.
+            // Without a Management Key, keep the policy-only subtitle as a useful fallback.
+            result.DetailsSubtitle = freeRequestsToday.HasValue && freeDailyLimit.HasValue
+                ? "Free models · 20 RPM"
+                : freeModelAllowance;
 
             if (creditsInfo == null && keyInfo.Limit is not > 0)
             {
-                // There is no percentage-based quota to summarize. Keep the neutral 100
-                // internally; the desktop card displays the healthy balance-style state as Active.
+                // There is no percentage-based monetary quota to summarize. Keep the neutral
+                // balance-style state internally; the free-model window remains a detail row.
                 result.PrimaryRemainingPercent = 100.0;
                 result.ResetText = keyInfo.Usage.HasValue ? $"{FormatUsd(keyInfo.Usage.Value)} used" : "Active";
                 result.FormattedNextResetIn = result.ResetText;
@@ -244,6 +281,59 @@ public class OpenRouterQuotaProvider : IQuotaProvider
         }
     }
 
+    private async Task<long?> TryFetchFreeModelRequestsTodayAsync(
+        string? managementKey,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(managementKey))
+        {
+            return null;
+        }
+
+        try
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            DateTimeOffset start = new(now.UtcDateTime.Date, TimeSpan.Zero);
+            DateTimeOffset end = now.AddMinutes(1);
+
+            var query = new
+            {
+                metrics = new[] { "request_count" },
+                dimensions = new[] { "variant" },
+                granularity = "day",
+                time_range = new
+                {
+                    start = start.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+                    end = end.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture)
+                },
+                limit = 50
+            };
+
+            string body = JsonSerializer.Serialize(query);
+            using var request = new HttpRequestMessage(HttpMethod.Post, AnalyticsQueryUrl);
+            request.Headers.Add("Authorization", $"Bearer {managementKey}");
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            string json = await response.Content.ReadAsStringAsync(cancellationToken);
+            return ParseFreeModelRequestCount(json);
+        }
+        catch (OperationCanceledException)
+        {
+            // Analytics is optional enrichment; do not discard otherwise valid quota data.
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static OpenRouterKeyInfo ParseKeyInfo(string json)
     {
         using var document = JsonDocument.Parse(json);
@@ -289,6 +379,49 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             TotalUsage = usage,
             Balance = Math.Max(0.0, credits - usage)
         };
+    }
+
+    private static long? ParseFreeModelRequestCount(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("data", out var payload))
+        {
+            return null;
+        }
+
+        JsonElement rows;
+        if (payload.ValueKind == JsonValueKind.Array)
+        {
+            rows = payload;
+        }
+        else if (payload.ValueKind == JsonValueKind.Object &&
+                 payload.TryGetProperty("data", out var nestedRows) &&
+                 nestedRows.ValueKind == JsonValueKind.Array)
+        {
+            rows = nestedRows;
+        }
+        else
+        {
+            return null;
+        }
+
+        long total = 0;
+        foreach (var row in rows.EnumerateArray())
+        {
+            string? variant = TryGetString(row, "variant");
+            if (!string.Equals(variant, "free", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            long? count = TryGetLong(row, "request_count");
+            if (count.HasValue)
+            {
+                total += Math.Max(0, count.Value);
+            }
+        }
+
+        return total;
     }
 
     private static string FormatLimitReset(string? reset, double usage)
@@ -363,6 +496,8 @@ public class OpenRouterQuotaProvider : IQuotaProvider
         return $"${value:F2}";
     }
 
+    private static string FormatCount(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
+
     private static double? TryGetDouble(JsonElement parent, string propertyName)
     {
         if (parent.TryGetProperty(propertyName, out var property) &&
@@ -371,6 +506,27 @@ public class OpenRouterQuotaProvider : IQuotaProvider
         {
             return value;
         }
+        return null;
+    }
+
+    private static long? TryGetLong(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out long numericValue))
+        {
+            return numericValue;
+        }
+
+        if (property.ValueKind == JsonValueKind.String &&
+            long.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out long stringValue))
+        {
+            return stringValue;
+        }
+
         return null;
     }
 
