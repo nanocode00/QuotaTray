@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using QuotaTray.Core.Models;
 
@@ -52,13 +53,21 @@ public class QuotaGroupViewModel : INotifyPropertyChanged
             PrimaryRemainingPercentText = g.PrimaryRemainingPercentText
         };
 
-        // codex-shared is a rendering group for the account-wide allowance, not a model group.
-        // Keep its window bars but suppress the meaningless "included models" toggle.
-        if (!g.GroupId.Equals("codex-shared", StringComparison.OrdinalIgnoreCase))
+        var modelNames = g.ModelsList
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .ToList();
+
+        // Rendering-only groups and single-model groups whose model name is already the
+        // group heading do not need an expandable list that repeats the same text.
+        bool isRenderingOnlyGroup = g.GroupId.Equals("codex-shared", StringComparison.OrdinalIgnoreCase);
+        bool repeatsGroupName = modelNames.Count == 1 &&
+                                modelNames[0].Equals(g.GroupName, StringComparison.OrdinalIgnoreCase);
+
+        if (!isRenderingOnlyGroup && !repeatsGroupName)
         {
-            foreach (var m in g.ModelsList)
+            foreach (var modelName in modelNames)
             {
-                if (!string.IsNullOrWhiteSpace(m)) vm.Models.Add(m);
+                vm.Models.Add(modelName);
             }
         }
 
