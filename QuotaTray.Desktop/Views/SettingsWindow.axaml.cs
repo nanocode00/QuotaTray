@@ -9,6 +9,8 @@ namespace QuotaTray.Desktop.Views;
 
 public partial class SettingsWindow : Window
 {
+    private const string OpenRouterManagementSettingsKey = "openrouter:management";
+
     public QuotaViewModel ViewModel { get; }
 
     public SettingsWindow()
@@ -16,6 +18,7 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         ViewModel = new QuotaViewModel();
         DataContext = ViewModel;
+        LoadOpenRouterManagementKey();
     }
 
     public SettingsWindow(QuotaViewModel viewModel)
@@ -26,6 +29,12 @@ public partial class SettingsWindow : Window
         SizeChanged += SettingsWindow_SizeChanged;
 
         StartupCheckBox.IsChecked = ViewModel.AutoStartupService.IsAutoStartupEnabled();
+        LoadOpenRouterManagementKey();
+    }
+
+    private void LoadOpenRouterManagementKey()
+    {
+        OpenRouterManagementKeyBox.Text = ViewModel.Settings.GetApiKey(OpenRouterManagementSettingsKey) ?? "";
     }
 
     public void ShowAtTrayPosition(PixelPoint? preferredPosition = null)
@@ -157,6 +166,12 @@ public partial class SettingsWindow : Window
         {
             opt.SaveCurrentApiKey();
         }
+    }
+
+    private void SaveOpenRouterManagementKey_Click(object? sender, RoutedEventArgs e)
+    {
+        ViewModel.Settings.SetApiKey(OpenRouterManagementSettingsKey, OpenRouterManagementKeyBox.Text);
+        _ = ViewModel.RefreshQuotaAsync();
     }
 
     private async void CopyDiagnostics_Click(object? sender, RoutedEventArgs e)
