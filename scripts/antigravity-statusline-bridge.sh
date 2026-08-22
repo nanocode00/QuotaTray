@@ -10,8 +10,7 @@ SNAPSHOT_PATH="${QUOTATRAY_ANTIGRAVITY_STATUS_PATH:-$CACHE_ROOT/antigravity-stat
 mkdir -p "$(dirname "$SNAPSHOT_PATH")"
 
 payload="$(cat)"
-
-python3 - "$SNAPSHOT_PATH" <<'PY' <<<"$payload"
+QUOTATRAY_STATUS_PAYLOAD="$payload" python3 - "$SNAPSHOT_PATH" <<'PY'
 import json
 import os
 import sys
@@ -19,7 +18,7 @@ import tempfile
 from datetime import datetime, timezone
 
 path = sys.argv[1]
-raw = sys.stdin.read()
+raw = os.environ.get("QUOTATRAY_STATUS_PAYLOAD", "")
 try:
     src = json.loads(raw)
 except Exception:
