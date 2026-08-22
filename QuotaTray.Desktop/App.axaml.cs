@@ -4,6 +4,10 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using QuotaTray.Core.Services;
+#if DEBUG
+using QuotaTray.Desktop.Diagnostics;
+#endif
 using QuotaTray.Desktop.Utils;
 using QuotaTray.Desktop.ViewModels;
 using QuotaTray.Desktop.Views;
@@ -26,7 +30,17 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            ViewModel = new QuotaViewModel();
+            var quotaService = new QuotaService();
+#if DEBUG
+            if (Program.UseCodexSparkMock)
+            {
+                // Override only the Codex provider. Other enabled providers continue to use
+                // their normal implementations, while Codex flows through the real parser
+                // methods with a sanitized Spark fixture for end-to-end UI verification.
+                quotaService.RegisterProvider(new CodexSparkMockQuotaProvider());
+            }
+#endif
+            ViewModel = new QuotaViewModel(quotaService);
 
             _mainWindow = new MainWindow(ViewModel);
             _settingsWindow = new SettingsWindow(ViewModel);
