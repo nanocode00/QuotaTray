@@ -45,10 +45,14 @@ public class QuotaGroupViewModel : INotifyPropertyChanged
 
     public static QuotaGroupViewModel FromModel(QuotaGroup g)
     {
+        string displayGroupName = g.GroupId.Equals("codex_bengalfox", StringComparison.OrdinalIgnoreCase)
+            ? "ChatGPT Pro · Research Preview"
+            : g.GroupName;
+
         var vm = new QuotaGroupViewModel
         {
             GroupId = g.GroupId,
-            GroupName = g.GroupName,
+            GroupName = displayGroupName,
             PrimaryRemainingPercent = g.PrimaryRemainingPercent,
             PrimaryRemainingPercentText = g.PrimaryRemainingPercentText
         };
@@ -58,12 +62,12 @@ public class QuotaGroupViewModel : INotifyPropertyChanged
             .ToList();
 
         // Rendering-only groups and single-model groups whose model name is already the
-        // group heading do not need an expandable list that repeats the same text.
+        // raw group heading do not need an expandable list that repeats the same text.
         bool isRenderingOnlyGroup = g.GroupId.Equals("codex-shared", StringComparison.OrdinalIgnoreCase);
-        bool repeatsGroupName = modelNames.Count == 1 &&
-                                modelNames[0].Equals(g.GroupName, StringComparison.OrdinalIgnoreCase);
+        bool repeatsRawGroupName = modelNames.Count == 1 &&
+                                   modelNames[0].Equals(g.GroupName, StringComparison.OrdinalIgnoreCase);
 
-        if (!isRenderingOnlyGroup && !repeatsGroupName)
+        if (!isRenderingOnlyGroup && !repeatsRawGroupName)
         {
             foreach (var modelName in modelNames)
             {
