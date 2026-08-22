@@ -50,6 +50,7 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             AuthMethod = AuthMethod,
             CliLoginCommand = CliLoginCommand,
             RequiresApiKey = RequiresApiKey,
+            IsBalanceProvider = true,
             FetchedAt = DateTimeOffset.UtcNow
         };
 
@@ -101,10 +102,15 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             var creditsInfo = await TryFetchCreditsAsync(key, cancellationToken);
             if (creditsInfo != null)
             {
-                result.IsBalanceProvider = true;
                 result.BalanceAmount = creditsInfo.Balance;
                 result.BalanceCurrency = "$";
                 result.BalanceFormatted = $"${creditsInfo.Balance:F2}";
+            }
+            else
+            {
+                // The existing balance-provider card can still represent a healthy key;
+                // avoid showing a false $0.00 when account credits are simply unavailable.
+                result.BalanceFormatted = "Active";
             }
 
             var windows = new List<QuotaWindow>();
@@ -176,7 +182,7 @@ public class OpenRouterQuotaProvider : IQuotaProvider
             if (creditsInfo == null && keyInfo.Limit is not > 0)
             {
                 // There is no percentage-based quota to summarize. Keep the neutral 100
-                // internally; the desktop view renders this OpenRouter state as "Active".
+                // internally; the desktop card displays the healthy balance-style state as Active.
                 result.PrimaryRemainingPercent = 100.0;
                 result.ResetText = keyInfo.Usage.HasValue ? $"{FormatUsd(keyInfo.Usage.Value)} used" : "Active";
                 result.FormattedNextResetIn = result.ResetText;
