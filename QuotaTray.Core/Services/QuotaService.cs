@@ -76,6 +76,13 @@ public class QuotaService
             if (_providers.TryGetValue(key, out var provider))
             {
                 provider.SetCustomApiKey(apiKeyResolver?.Invoke(provider.ProviderKey));
+
+                if (provider is IManagementKeyProvider managementKeyProvider)
+                {
+                    managementKeyProvider.SetManagementKey(
+                        apiKeyResolver?.Invoke($"{provider.ProviderKey}:management"));
+                }
+
                 tasks.Add(FetchWithCacheFallbackAsync(provider, cancellationToken));
             }
         }
