@@ -88,7 +88,7 @@ if ([string]::IsNullOrWhiteSpace($apiKey)) {
 }
 
 try {
-    Write-Host '[1/2] GET /api/v1/key'
+    Write-Host '[1/3] GET /api/v1/key'
     $keyResponse = Invoke-OpenRouterGet -Url 'https://openrouter.ai/api/v1/key' -ApiKey $apiKey
     Write-Host ('HTTP {0} {1}' -f $keyResponse.StatusCode, $keyResponse.Reason)
 
@@ -116,7 +116,7 @@ try {
     }
 
     Write-Host ''
-    Write-Host '[2/2] GET /api/v1/credits'
+    Write-Host '[2/3] GET /api/v1/credits'
     $creditsResponse = Invoke-OpenRouterGet -Url 'https://openrouter.ai/api/v1/credits' -ApiKey $apiKey
     Write-Host ('HTTP {0} {1}' -f $creditsResponse.StatusCode, $creditsResponse.Reason)
 
@@ -140,7 +140,31 @@ try {
         }
     }
     else {
-        Write-Host '[INFO] /credits may require a Management Key; this failure is useful for compatibility design.'
+        Write-Host '[INFO] /credits is unavailable for this key; provider should treat it as optional.'
+    }
+
+    Write-Host ''
+    Write-Host '[3/3] GET /api/v1/analytics/meta'
+    $analyticsResponse = Invoke-OpenRouterGet -Url 'https://openrouter.ai/api/v1/analytics/meta' -ApiKey $apiKey
+    Write-Host ('HTTP {0} {1}' -f $analyticsResponse.StatusCode, $analyticsResponse.Reason)
+
+    if ($analyticsResponse.StatusCode -ge 200 -and $analyticsResponse.StatusCode -lt 300) {
+        $analyticsJson = Read-JsonSafe $analyticsResponse.Body
+        Write-Host '[PASS] Analytics API is accessible with this key.'
+
+        if ($null -ne $analyticsJson) {
+            $propertyNames = @($analyticsJson.PSObject.Properties.Name)
+            if ($propertyNames.Count -gt 0) {
+                Write-Host ('- top-level fields: {0}' -f ($propertyNames -join ', '))
+            }
+        }
+    }
+    elseif ($analyticsResponse.StatusCode -eq 401 -or $analyticsResponse.StatusCode -eq 403) {
+        Write-Host '[INFO] Analytics API is not accessible with this regular API key.'
+        Write-Host '       OpenRouter documents Analytics API access as requiring a Management Key.'
+    }
+    else {
+        Write-Host '[WARN] Analytics API returned an unexpected status; keep free-request usage optional.'
     }
 
     Write-Host ''
