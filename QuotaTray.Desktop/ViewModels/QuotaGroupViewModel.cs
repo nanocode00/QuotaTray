@@ -32,10 +32,13 @@ public class QuotaGroupViewModel : INotifyPropertyChanged
         }
     }
 
-    public string ToggleText => IsExpanded ? "▼ 모델 목록 접기" : $"▶ 포함 모델 보기 ({Models.Count})";
+    public string ToggleText => Models.Count == 0
+        ? ""
+        : IsExpanded ? "▼ 모델 목록 접기" : $"▶ 포함 모델 보기 ({Models.Count})";
 
     public void Toggle()
     {
+        if (Models.Count == 0) return;
         IsExpanded = !IsExpanded;
     }
 
@@ -49,7 +52,16 @@ public class QuotaGroupViewModel : INotifyPropertyChanged
             PrimaryRemainingPercentText = g.PrimaryRemainingPercentText
         };
 
-        foreach (var m in g.ModelsList) vm.Models.Add(m);
+        // codex-shared is a rendering group for the account-wide allowance, not a model group.
+        // Keep its window bars but suppress the meaningless "included models" toggle.
+        if (!g.GroupId.Equals("codex-shared", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var m in g.ModelsList)
+            {
+                if (!string.IsNullOrWhiteSpace(m)) vm.Models.Add(m);
+            }
+        }
+
         foreach (var w in g.Windows) vm.Windows.Add(w);
 
         return vm;
