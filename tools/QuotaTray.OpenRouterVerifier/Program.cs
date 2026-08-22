@@ -21,6 +21,7 @@ internal static class Program
         await RunAsync("Credits parse failure is optional", VerifyMalformedCreditsAsync);
         await RunAsync("Unauthorized /key expires auth", VerifyUnauthorizedKeyAsync);
         await RunAsync("Uses /api/v1/key, not legacy /auth/key", VerifyCurrentKeyEndpointAsync);
+        await RunAsync("Management analytics adds real free-model quota", VerifyFreeAnalyticsAsync);
 
         Console.WriteLine();
         Console.WriteLine(_failures == 0
@@ -90,7 +91,7 @@ internal static class Program
         Expect(result.Windows[0].FormattedResetIn.Contains("Month $0.0024 used", StringComparison.Ordinal),
             $"monthly usage should be separated onto the credits row: {result.Windows[0].FormattedResetIn}");
         Expect(result.Windows.All(w => !w.Name.Contains("Free models", StringComparison.OrdinalIgnoreCase)),
-            "synthetic free-model progress bar was created");
+            "free-model window should require Management Key analytics");
     }
 
     private static async Task VerifyFreeTierWithoutCreditsAsync()
@@ -120,7 +121,7 @@ internal static class Program
         Expect(result.BalanceFormatted == "Active", $"expected Active fallback, got {result.BalanceFormatted}");
         Expect(result.DetailsSubtitle == "Free 50/day · 20 RPM",
             $"free-tier entitlement should occupy its own subtitle line: {result.DetailsSubtitle}");
-        Expect(result.Windows.Count == 0, "free-model policy must not become a quota window");
+        Expect(result.Windows.Count == 0, "free-model policy must not become a quota window without analytics");
     }
 
     private static async Task VerifyKeyLimitAsync()
@@ -153,7 +154,7 @@ internal static class Program
         Expect(window.FormattedResetIn.StartsWith("Reset in ", StringComparison.Ordinal),
             $"monthly reset was not converted to countdown: {window.FormattedResetIn}");
         Expect(result.Windows.All(w => !w.Name.Contains("Free models", StringComparison.OrdinalIgnoreCase)),
-            "synthetic free-model window was created");
+            "free-model window should require Management Key analytics");
     }
 
     private static async Task VerifyMalformedCreditsAsync()
@@ -212,11 +213,66 @@ internal static class Program
         Expect(!handler.RequestedPaths.Contains("/api/v1/auth/key"), "legacy /auth/key was requested");
     }
 
-    private static async Task<ProviderQuotaResult> FetchAsync(FixtureHandler handler)
+    private static async Task VerifyFreeAnalyticsAsync()
+    {
+        var handler = new FixtureHandler(request => request.RequestUri?.AbsolutePath switch
+        {
+            "/api/v1/key" => Json(HttpStatusCode.OK, """
+            {
+              "data": {
+                "is_free_tier": false,
+                "usage": 0.00240817,
+                "usage_monthly": 0.00240817
+              }
+            }
+            """),
+            "/api/v1/credits" => Json(HttpStatusCode.OK, """
+            {
+              "data": {
+                "total_credits": 10,
+                "total_usage": 0.00240817
+              }
+            }
+            """),
+            "/api/v1/analytics/query" => Json(HttpStatusCode.OK, """
+            {
+              "data": {
+                "data": [
+                  { "variant": "standard", "request_count": "7" },
+                  { "variant": "free", "request_count": "20" }
+                ],
+                "metadata": {
+                  "row_count": 2,
+                  "truncated": false
+                }
+              }
+            }
+            """),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        });
+
+        var result = await FetchAsync(handler, "sk-or-v1-sanitized-management-key");
+
+        Expect(result.IsSuccess, "provider should remain successful with analytics enrichment");
+        Expect(result.DetailsSubtitle == "Free models · 20 RPM",
+            $"analytics subtitle mismatch: {result.DetailsSubtitle}");
+        Expect(result.Windows.Count == 2, $"expected credits + free-model windows, got {result.Windows.Count}");
+
+        QuotaWindow free = result.Windows.Single(w => w.Name.StartsWith("Free models", StringComparison.Ordinal));
+        Expect(free.Name.Contains("20 / 1,000 today", StringComparison.Ordinal),
+            $"unexpected free-model label: {free.Name}");
+        Expect(Math.Abs(free.RemainingPercent - 98.0) < 0.001,
+            $"expected 98% remaining, got {free.RemainingPercent}");
+        Expect(free.FormattedResetIn == "20 RPM", $"unexpected free-model meta: {free.FormattedResetIn}");
+        Expect(handler.RequestedPaths.Contains("/api/v1/analytics/query"), "analytics endpoint was not requested");
+    }
+
+    private static async Task<ProviderQuotaResult> FetchAsync(FixtureHandler handler, string? managementKey = null)
     {
         using var httpClient = new HttpClient(handler, disposeHandler: false);
         var provider = new OpenRouterQuotaProvider(httpClient);
         provider.SetCustomApiKey("sk-or-v1-sanitized-fixture-key");
+        provider.SetManagementKey(managementKey);
         return await provider.FetchQuotaAsync();
     }
 
