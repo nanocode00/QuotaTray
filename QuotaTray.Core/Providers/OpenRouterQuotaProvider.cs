@@ -114,6 +114,12 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                 result.BalanceFormatted = "Active";
             }
 
+            string monthlyUsage = keyInfo.UsageMonthly.HasValue
+                ? $"Month {FormatUsd(keyInfo.UsageMonthly.Value)} used"
+                : keyInfo.Usage.HasValue
+                    ? $"Usage {FormatUsd(keyInfo.Usage.Value)}"
+                    : "Usage unavailable";
+
             var windows = new List<QuotaWindow>();
 
             if (creditsInfo != null)
@@ -129,12 +135,14 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                         : $"Credits ({FormatUsdDetailed(creditsInfo.Balance)})",
                     UsedPercent = ClampPercent(100.0 - balancePct),
                     RemainingPercent = balancePct,
-                    FormattedResetIn = $"Used {FormatUsdDetailed(creditsInfo.TotalUsage)}"
+                    // Keep monthly usage on the quota row so the entitlement text can use
+                    // the full subtitle width instead of being squeezed into one line.
+                    FormattedResetIn = monthlyUsage
                 });
 
                 result.PrimaryRemainingPercent = balancePct;
-                result.ResetText = $"{FormatUsdDetailed(creditsInfo.TotalUsage)} used";
-                result.FormattedNextResetIn = result.ResetText;
+                result.ResetText = monthlyUsage;
+                result.FormattedNextResetIn = monthlyUsage;
             }
 
             // A spending limit is a real quota and can be represented as a progress bar.
@@ -172,13 +180,9 @@ public class OpenRouterQuotaProvider : IQuotaProvider
                 _ => "Free allowance unavailable"
             };
 
-            string monthlyUsage = keyInfo.UsageMonthly.HasValue
-                ? $"Month {FormatUsd(keyInfo.UsageMonthly.Value)}"
-                : keyInfo.Usage.HasValue
-                    ? $"Usage {FormatUsd(keyInfo.Usage.Value)}"
-                    : "Usage unavailable";
-
-            result.DetailsSubtitle = $"{monthlyUsage} · {freeModelAllowance}";
+            // Entitlement/policy information gets its own line. Monthly usage is shown on
+            // the credits row when available, avoiding a crowded and truncated subtitle.
+            result.DetailsSubtitle = freeModelAllowance;
 
             if (creditsInfo == null && keyInfo.Limit is not > 0)
             {
