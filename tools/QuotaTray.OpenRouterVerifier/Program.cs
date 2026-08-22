@@ -82,9 +82,13 @@ internal static class Program
         Expect(result.BalanceAmount.HasValue && Math.Abs(result.BalanceAmount.Value - 9.99759183) < 0.000001,
             $"unexpected balance {result.BalanceAmount}");
         Expect(result.BalanceFormatted == "$10.00", $"unexpected formatted balance {result.BalanceFormatted}");
-        Expect(result.DetailsSubtitle.Contains("1,000/day", StringComparison.Ordinal), "PAYG free-model allowance missing");
+        Expect(result.DetailsSubtitle.Contains("1k/day", StringComparison.Ordinal), "PAYG free-model allowance missing");
         Expect(result.DetailsSubtitle.Contains("$0.0024", StringComparison.Ordinal), "small monthly usage should retain precision");
         Expect(result.Windows.Count == 1, $"expected only credits window, got {result.Windows.Count}");
+        Expect(result.Windows[0].Name.Contains("$9.9976", StringComparison.Ordinal),
+            $"remaining credits should retain precision: {result.Windows[0].Name}");
+        Expect(result.Windows[0].FormattedResetIn.Contains("$0.0024", StringComparison.Ordinal),
+            $"small total usage should retain precision: {result.Windows[0].FormattedResetIn}");
         Expect(result.Windows.All(w => !w.Name.Contains("Free models", StringComparison.OrdinalIgnoreCase)),
             "synthetic free-model progress bar was created");
     }
