@@ -117,35 +117,47 @@ public class CodexQuotaProvider : IQuotaProvider
                     ParseRateLimitWindow(rateLimitProp, "secondary_window", windows);
                 }
 
-                // If 5h window is omitted (unused / 100% remaining), add 100% remaining 5h window
-                bool has5h = windows.Any(w => w.LimitWindowSeconds <= 86400 || w.Name.Contains("5h"));
-                if (!has5h)
-                {
-                    windows.Add(new QuotaWindow
-                    {
-                        Name = "5h",
-                        LimitWindowSeconds = 18000,
-                        UsedPercent = 0.0,
-                        RemainingPercent = 100.0,
-                        ResetInSeconds = 0,
-                        FormattedResetIn = "Reset: Available"
-                    });
-                }
-
-                // Sort windows: 5h before 7d for detailed breakdown
+                // Do not synthesize missing 5h/7d windows. OpenAI may expose only the
+                // windows that are active for a given plan/account at that moment.
                 windows.Sort((a, b) => a.LimitWindowSeconds.CompareTo(b.LimitWindowSeconds));
                 result.Windows = windows;
 
-                // Codex: Always use 7d quota as representative value, 5h is detailed only
-                var w7d = windows.FirstOrDefault(w => w.LimitWindowSeconds > 86400 || w.Name.Contains("7d", StringComparison.OrdinalIgnoreCase))
-                         ?? windows.FirstOrDefault();
-
-                if (w7d != null)
+                // Model/feature-specific quotas (for example Codex Spark) are returned
+                // separately from the account-wide Codex quota. Parse them generically
+                // instead of keying behavior to a specific plan name so Plus/Pro/Business
+                // and future plan variants continue to behave according to the server payload.
+                var additionalGroups = ParseAdditionalRateLimitGroups(root);
+                if (additionalGroups.Count > 0)
                 {
-                    result.PrimaryRemainingPercent = w7d.RemainingPercent;
-                    result.NextResetInSeconds = w7d.ResetInSeconds;
-                    result.FormattedNextResetIn = w7d.FormattedResetIn;
-                    result.ResetText = w7d.FormattedResetIn;
+                    result.Groups = new List<QuotaGroup>();
+
+                    // Detailed mode switches to grouped rendering when Groups is non-empty,
+                    // so include the shared Codex windows as the first group as well.
+                    if (windows.Count > 0)
+                    {
+                        result.Groups.Add(new QuotaGroup
+                        {
+                            GroupId = "codex-shared",
+                            GroupName = "Codex",
+                            ModelsList = new List<string> { "Shared Codex allowance" },
+                            Windows = new List<QuotaWindow>(windows)
+                        });
+                    }
+
+                    result.Groups.AddRange(additionalGroups);
+                }
+
+                // Compact card: keep the account-wide Codex quota as the representative
+                // value. Prefer the longest window returned by the server (normally weekly).
+                var representativeWindow = windows.OrderByDescending(w => w.LimitWindowSeconds).FirstOrDefault()
+                                         ?? windows.FirstOrDefault();
+
+                if (representativeWindow != null)
+                {
+                    result.PrimaryRemainingPercent = representativeWindow.RemainingPercent;
+                    result.NextResetInSeconds = representativeWindow.ResetInSeconds;
+                    result.FormattedNextResetIn = representativeWindow.FormattedResetIn;
+                    result.ResetText = representativeWindow.FormattedResetIn;
                 }
                 else
                 {
@@ -267,7 +279,88 @@ public class CodexQuotaProvider : IQuotaProvider
         }
     }
 
-    private static void ParseRateLimitWindow(JsonElement rateLimitProp, string propertyName, List<QuotaWindow> list)
+    private static List<QuotaGroup> ParseAdditionalRateLimitGroups(JsonElement root)
+    {
+        var groups = new List<QuotaGroup>();
+
+        if (!root.TryGetProperty("additional_rate_limits", out var additionalProp) ||
+            additionalProp.ValueKind != JsonValueKind.Array)
+        {
+            return groups;
+        }
+
+        int fallbackIndex = 0;
+        foreach (var item in additionalProp.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            string? limitName = null;
+            string? meteredFeature = null;
+
+            if (item.TryGetProperty("limit_name", out var limitNameProp) && limitNameProp.ValueKind == JsonValueKind.String)
+            {
+                limitName = limitNameProp.GetString();
+            }
+
+            if (item.TryGetProperty("metered_feature", out var featureProp) && featureProp.ValueKind == JsonValueKind.String)
+            {
+                meteredFeature = featureProp.GetString();
+            }
+
+            if (!item.TryGetProperty("rate_limit", out var rateLimitProp) || rateLimitProp.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var groupWindows = new List<QuotaWindow>();
+            ParseRateLimitWindow(rateLimitProp, "primary_window", groupWindows, markUnusedAsAvailable: true);
+            ParseRateLimitWindow(rateLimitProp, "secondary_window", groupWindows, markUnusedAsAvailable: true);
+
+            if (groupWindows.Count == 0)
+            {
+                continue;
+            }
+
+            groupWindows.Sort((a, b) => a.LimitWindowSeconds.CompareTo(b.LimitWindowSeconds));
+
+            string groupName = !string.IsNullOrWhiteSpace(limitName)
+                ? limitName!
+                : !string.IsNullOrWhiteSpace(meteredFeature)
+                    ? meteredFeature!
+                    : $"Additional quota {fallbackIndex + 1}";
+
+            string groupId = !string.IsNullOrWhiteSpace(meteredFeature)
+                ? meteredFeature!
+                : $"codex-additional-{fallbackIndex}";
+
+            var models = new List<string>();
+            if (!string.IsNullOrWhiteSpace(limitName))
+            {
+                models.Add(limitName!);
+            }
+
+            groups.Add(new QuotaGroup
+            {
+                GroupId = groupId,
+                GroupName = groupName,
+                ModelsList = models,
+                Windows = groupWindows
+            });
+
+            fallbackIndex++;
+        }
+
+        return groups;
+    }
+
+    private static void ParseRateLimitWindow(
+        JsonElement rateLimitProp,
+        string propertyName,
+        List<QuotaWindow> list,
+        bool markUnusedAsAvailable = false)
     {
         if (!rateLimitProp.TryGetProperty(propertyName, out var windowProp) || windowProp.ValueKind != JsonValueKind.Object)
         {
@@ -287,26 +380,43 @@ public class CodexQuotaProvider : IQuotaProvider
         }
 
         long resetAfterSeconds = 0;
+        bool hasResetAfter = false;
         if (windowProp.TryGetProperty("reset_after_seconds", out var resetProp) && resetProp.TryGetInt64(out var rs))
         {
-            resetAfterSeconds = rs;
+            resetAfterSeconds = Math.Max(0, rs);
+            hasResetAfter = true;
+        }
+
+        // Some WHAM responses expose reset_at without reset_after_seconds.
+        if (!hasResetAfter && windowProp.TryGetProperty("reset_at", out var resetAtProp) && resetAtProp.TryGetInt64(out var resetAt))
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            resetAfterSeconds = Math.Max(0, resetAt - now);
         }
 
         string windowName;
         if (windowSecs > 0 && windowSecs <= 86400)
         {
-            windowName = $"{windowSecs / 3600}h";
+            windowName = $"{Math.Max(1, windowSecs / 3600)}h";
         }
         else if (windowSecs > 86400)
         {
-            windowName = $"{windowSecs / 86400}d";
+            windowName = $"{Math.Max(1, windowSecs / 86400)}d";
         }
         else
         {
-            windowName = propertyName.Contains("primary") ? "5h" : "7d";
+            windowName = propertyName.Contains("primary", StringComparison.OrdinalIgnoreCase) ? "Primary" : "Secondary";
         }
 
         double remainingPercent = Math.Max(0.0, Math.Min(100.0, 100.0 - usedPercent));
+
+        // A never-used feature bucket can be returned with a full-window reset timer
+        // that simply re-anchors on every refresh. Surface it as available instead of
+        // showing a misleading countdown.
+        bool isUnusedUnanchoredWindow = markUnusedAsAvailable &&
+                                        usedPercent <= 0.0 &&
+                                        windowSecs > 0 &&
+                                        resetAfterSeconds >= Math.Max(0, windowSecs - 60);
 
         list.Add(new QuotaWindow
         {
@@ -314,8 +424,10 @@ public class CodexQuotaProvider : IQuotaProvider
             LimitWindowSeconds = windowSecs,
             UsedPercent = usedPercent,
             RemainingPercent = remainingPercent,
-            ResetInSeconds = resetAfterSeconds,
-            FormattedResetIn = TimeFormatter.FormatResetText(resetAfterSeconds)
+            ResetInSeconds = isUnusedUnanchoredWindow ? 0 : resetAfterSeconds,
+            FormattedResetIn = isUnusedUnanchoredWindow
+                ? "Available"
+                : TimeFormatter.FormatResetText(resetAfterSeconds)
         });
     }
 
