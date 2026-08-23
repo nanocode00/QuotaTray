@@ -117,36 +117,32 @@ public sealed class QuotaAccuracyGuardProvider : IQuotaProvider, IManagementKeyP
         QuotaWindow? freeWindow = result.Windows.FirstOrDefault(window =>
             window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase));
 
-        long? usedToday = freeWindow == null ? null : TryParseFreeRequestsUsed(freeWindow.Name);
-        int? confirmedCap = TryResolveConfirmedOpenRouterFreeCap(result);
+        long? usedUtcToday = freeWindow == null ? null : TryParseFreeRequestsUsed(freeWindow.Name);
+        int? confirmedPolicyCap = TryResolveConfirmedOpenRouterFreeCap(result);
 
-        if (freeWindow != null && confirmedCap.HasValue && usedToday.HasValue)
+        // Analytics proves a count for the UTC calendar range QuotaTray queried. OpenRouter
+        // documents the 50/1,000 requests-per-day policy, but does not document the free
+        // tier's exact reset boundary. Therefore do not convert the count into a remaining
+        // percentage/progress bar. Keep the measured count and policy entitlement as text.
+        if (freeWindow != null)
         {
-            long remaining = Math.Max(0, confirmedCap.Value - usedToday.Value);
-            double remainingPercent = Math.Clamp(remaining / (double)confirmedCap.Value * 100.0, 0.0, 100.0);
-            freeWindow.Name = $"Free models ({usedToday.Value:N0} / {confirmedCap.Value:N0} today)";
-            freeWindow.RemainingPercent = remainingPercent;
-            freeWindow.UsedPercent = 100.0 - remainingPercent;
-            result.DetailsSubtitle = "Free models · 20 RPM";
-            return;
-        }
-
-        if (freeWindow != null && !confirmedCap.HasValue)
-        {
-            // Analytics proves today's request count, but without account evidence for the
-            // $10 credit threshold we cannot safely claim whether the cap is 50 or 1,000.
             result.Windows.Remove(freeWindow);
-            result.DetailsSubtitle = usedToday.HasValue
-                ? $"Free models · {usedToday.Value:N0} today · 20 RPM · daily cap unknown"
-                : "Free models · 20 RPM · daily cap unknown";
+
+            string measured = usedUtcToday.HasValue
+                ? $"{usedUtcToday.Value:N0} requests UTC today"
+                : "usage measured";
+
+            result.DetailsSubtitle = confirmedPolicyCap.HasValue
+                ? $"Free models · {measured} · policy {confirmedPolicyCap.Value:N0}/day · 20 RPM"
+                : $"Free models · {measured} · 20 RPM · daily cap unknown";
             return;
         }
 
         // When analytics is not configured, make it explicit that the number is policy
         // information rather than a measured per-account remaining quota.
-        if (confirmedCap.HasValue)
+        if (confirmedPolicyCap.HasValue)
         {
-            result.DetailsSubtitle = $"Policy · Free {confirmedCap.Value:N0}/day · 20 RPM";
+            result.DetailsSubtitle = $"Policy · Free {confirmedPolicyCap.Value:N0}/day · 20 RPM";
         }
         else if (result.DetailsSubtitle.StartsWith("Free ", StringComparison.OrdinalIgnoreCase))
         {
@@ -159,9 +155,8 @@ public sealed class QuotaAccuracyGuardProvider : IQuotaProvider, IManagementKeyP
         double? totalCredits = TryParseTotalCredits(result);
         if (totalCredits.HasValue)
         {
-            // OpenRouter's published free-model policy is based on whether the account has
-            // added at least $10 in credits. total_credits is stronger evidence than merely
-            // assuming every non-free API key qualifies for the 1,000/day tier.
+            // OpenRouter documents total_credits as total credits purchased. Its free-model
+            // policy raises the daily cap from 50 to 1,000 after at least $10 is purchased.
             return totalCredits.Value >= 10.0 ? 1000 : 50;
         }
 
