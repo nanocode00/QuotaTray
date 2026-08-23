@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using QuotaTray.Core.Models;
@@ -28,7 +29,14 @@ public class QuotaService
     public QuotaService()
     {
         RegisterProvider(new CodexQuotaProvider());
-        RegisterProvider(new AntigravityQuotaProvider());
+
+        var antigravityHandler = new AntigravitySessionCoordinatorHandler();
+        var antigravityHttpClient = new HttpClient(antigravityHandler)
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+        RegisterProvider(new AntigravityQuotaProvider(antigravityHttpClient));
+
         RegisterProvider(new ClaudeQuotaProvider());
         RegisterProvider(new CopilotQuotaProvider());
         RegisterProvider(new OpenRouterQuotaProvider());
