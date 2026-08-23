@@ -28,18 +28,25 @@ public class QuotaService
 
     public QuotaService()
     {
-        RegisterProvider(new CodexQuotaProvider());
+        RegisterProvider(new QuotaAccuracyGuardProvider(new CodexQuotaProvider()));
 
-        var antigravityHandler = new AntigravitySessionCoordinatorHandler();
-        var antigravityHttpClient = new HttpClient(antigravityHandler)
+        var antigravityAccuracyHandler = new AntigravityAccuracyHandler();
+        var antigravitySessionHandler = new AntigravitySessionCoordinatorHandler(antigravityAccuracyHandler);
+        var antigravityHttpClient = new HttpClient(antigravitySessionHandler)
         {
             Timeout = TimeSpan.FromSeconds(15)
         };
-        RegisterProvider(new AntigravityQuotaProvider(antigravityHttpClient));
+        RegisterProvider(new QuotaAccuracyGuardProvider(new AntigravityQuotaProvider(antigravityHttpClient)));
 
         RegisterProvider(new ClaudeQuotaProvider());
-        RegisterProvider(new CopilotQuotaProvider());
-        RegisterProvider(new OpenRouterQuotaProvider());
+
+        var copilotHttpClient = new HttpClient(new CopilotAccuracyHandler())
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+        RegisterProvider(new QuotaAccuracyGuardProvider(new CopilotQuotaProvider(copilotHttpClient)));
+
+        RegisterProvider(new QuotaAccuracyGuardProvider(new OpenRouterQuotaProvider()));
         RegisterProvider(new KimiQuotaProvider());
         RegisterProvider(new ZaiQuotaProvider());
         RegisterProvider(new SyntheticQuotaProvider());
