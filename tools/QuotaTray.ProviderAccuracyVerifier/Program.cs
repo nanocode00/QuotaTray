@@ -20,9 +20,10 @@ internal static class Program
         await RunAsync("Antigravity payload keeps only verified buckets", VerifyAntigravityPayloadSanitizerAsync);
         await RunAsync("Copilot incomplete finite quota is removed", VerifyCopilotPayloadSanitizerAsync);
         await RunAsync("Codex empty quota response is not reported as 100%", VerifyCodexEmptyRejectedAsync);
-        await RunAsync("OpenRouter free plan keeps confirmed 50/day cap", VerifyOpenRouterFreeCapAsync);
+        await RunAsync("OpenRouter analytics query uses verified dimensions", VerifyOpenRouterQueryNormalizedAsync);
+        await RunAsync("OpenRouter free usage is text-only with confirmed 50/day policy", VerifyOpenRouterFreeCapAsync);
         await RunAsync("OpenRouter unconfirmed PAYG cap is hidden", VerifyOpenRouterUnknownPaidCapAsync);
-        await RunAsync("OpenRouter $10+ credits confirms 1,000/day cap", VerifyOpenRouterConfirmedPaidCapAsync);
+        await RunAsync("OpenRouter $10+ credits confirms 1,000/day policy", VerifyOpenRouterConfirmedPaidCapAsync);
 
         Console.WriteLine();
         Console.WriteLine(_failures == 0
@@ -159,12 +160,35 @@ internal static class Program
         Expect(result.ResetText == "Unavailable", "empty Codex result still looks available");
     }
 
+    private static async Task VerifyOpenRouterQueryNormalizedAsync()
+    {
+        var inner = new StaticJsonHandler("{\"data\":{\"data\":[]}}");
+        using var client = new HttpClient(new OpenRouterAccuracyHandler(inner));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/analytics/query")
+        {
+            Content = new StringContent("{\"dimensions\":[\"variant\"],\"limit\":50}", Encoding.UTF8, "application/json")
+        };
+
+        using HttpResponseMessage response = await client.SendAsync(request);
+        using JsonDocument body = JsonDocument.Parse(inner.LastRequestBody);
+        JsonElement dimensions = body.RootElement.GetProperty("dimensions");
+
+        Expect(dimensions.GetArrayLength() == 2, "analytics dimensions were not expanded");
+        Expect(dimensions[0].GetString() == "model" && dimensions[1].GetString() == "variant",
+            "expected model + variant analytics dimensions");
+        Expect(body.RootElement.GetProperty("limit").GetInt32() == 500, "analytics row limit was not raised");
+    }
+
     private static async Task VerifyOpenRouterFreeCapAsync()
     {
         ProviderQuotaResult fixture = OpenRouterResult("Free", null, 12, 50);
         ProviderQuotaResult result = await Guard("openrouter", fixture).FetchQuotaAsync();
-        QuotaWindow free = result.Windows.Single(window => window.Name.StartsWith("Free models ("));
-        Expect(free.Name.Contains("12 / 50 today", StringComparison.Ordinal), $"unexpected free cap: {free.Name}");
+        Expect(result.Windows.All(window => !window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase)),
+            "measured free usage must not be rendered as a progress bar");
+        Expect(result.DetailsSubtitle.Contains("12 requests UTC today", StringComparison.Ordinal),
+            $"measured free usage missing: {result.DetailsSubtitle}");
+        Expect(result.DetailsSubtitle.Contains("policy 50/day", StringComparison.Ordinal),
+            $"confirmed free policy missing: {result.DetailsSubtitle}");
     }
 
     private static async Task VerifyOpenRouterUnknownPaidCapAsync()
@@ -173,6 +197,8 @@ internal static class Program
         ProviderQuotaResult result = await Guard("openrouter", fixture).FetchQuotaAsync();
         Expect(result.Windows.All(window => !window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase)),
             "unconfirmed 1,000/day progress bar should be hidden");
+        Expect(result.DetailsSubtitle.Contains("20 requests UTC today", StringComparison.Ordinal),
+            "measured request count should remain visible");
         Expect(result.DetailsSubtitle.Contains("cap unknown", StringComparison.OrdinalIgnoreCase),
             "unknown cap should be stated explicitly");
     }
@@ -181,9 +207,12 @@ internal static class Program
     {
         ProviderQuotaResult fixture = OpenRouterResult("PAYG", 10.0, 20, 1000);
         ProviderQuotaResult result = await Guard("openrouter", fixture).FetchQuotaAsync();
-        QuotaWindow free = result.Windows.Single(window => window.Name.StartsWith("Free models ("));
-        Expect(free.Name.Contains("20 / 1,000 today", StringComparison.Ordinal), $"unexpected paid cap: {free.Name}");
-        Expect(Math.Abs(free.RemainingPercent - 98.0) < 0.001, $"expected 98%, got {free.RemainingPercent}");
+        Expect(result.Windows.All(window => !window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase)),
+            "free usage progress must stay hidden even when policy cap is confirmed");
+        Expect(result.DetailsSubtitle.Contains("20 requests UTC today", StringComparison.Ordinal),
+            $"measured usage missing: {result.DetailsSubtitle}");
+        Expect(result.DetailsSubtitle.Contains("policy 1,000/day", StringComparison.Ordinal),
+            $"confirmed paid policy missing: {result.DetailsSubtitle}");
     }
 
     private static QuotaAccuracyGuardProvider Guard(string key, ProviderQuotaResult result)
@@ -264,15 +293,20 @@ internal static class Program
     {
         private readonly string _json;
         public string LastUserAgent { get; private set; } = string.Empty;
+        public string LastRequestBody { get; private set; } = "{}";
         public StaticJsonHandler(string json) => _json = json;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastUserAgent = string.Join(" ", request.Headers.UserAgent.Select(value => value.ToString()));
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            LastRequestBody = request.Content == null
+                ? "{}"
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_json, Encoding.UTF8, "application/json")
-            });
+            };
         }
     }
 }
