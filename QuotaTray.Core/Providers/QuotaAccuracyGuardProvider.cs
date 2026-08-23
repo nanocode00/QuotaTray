@@ -82,14 +82,9 @@ public sealed class QuotaAccuracyGuardProvider : IQuotaProvider, IManagementKeyP
             return;
         }
 
-        // The current Antigravity API response gives QuotaTray quota groups/buckets but
-        // not a trustworthy canonical model roster. Never present the provider's old
-        // hard-coded model list as if it came from the user's account.
-        foreach (QuotaGroup group in result.Groups)
-        {
-            group.ModelsList.Clear();
-        }
-
+        // Keep the known model-roster metadata used to explain each Antigravity pool.
+        // It is descriptive metadata, not a fabricated quota value. Accuracy hardening
+        // only filters unverified quota buckets and never turns this list into usage data.
         result.Groups = result.Groups
             .Where(group => group.Windows.Count > 0)
             .ToList();
@@ -120,21 +115,35 @@ public sealed class QuotaAccuracyGuardProvider : IQuotaProvider, IManagementKeyP
         long? usedUtcToday = freeWindow == null ? null : TryParseFreeRequestsUsed(freeWindow.Name);
         int? confirmedPolicyCap = TryResolveConfirmedOpenRouterFreeCap(result);
 
-        // Analytics proves a count for the UTC calendar range QuotaTray queried. OpenRouter
-        // documents the 50/1,000 requests-per-day policy, but does not document the free
-        // tier's exact reset boundary. Therefore do not convert the count into a remaining
-        // percentage/progress bar. Keep the measured count and policy entitlement as text.
+        if (freeWindow != null && usedUtcToday.HasValue && confirmedPolicyCap.HasValue)
+        {
+            // Analytics gives the measured UTC-calendar-day request count, while the
+            // published account policy gives the 50/1,000 daily entitlement. Restore the
+            // useful daily quota row, but do not invent a reset countdown because the
+            // exact free-model reset boundary is not documented here.
+            long remaining = Math.Max(0, confirmedPolicyCap.Value - usedUtcToday.Value);
+            double remainingPercent = Math.Clamp(
+                remaining / (double)confirmedPolicyCap.Value * 100.0,
+                0.0,
+                100.0);
+
+            freeWindow.Name = $"Free models ({usedUtcToday.Value:N0} / {confirmedPolicyCap.Value:N0} today)";
+            freeWindow.RemainingPercent = remainingPercent;
+            freeWindow.UsedPercent = Math.Clamp(100.0 - remainingPercent, 0.0, 100.0);
+            freeWindow.ResetInSeconds = 0;
+            freeWindow.FormattedResetIn = "20 RPM";
+            result.DetailsSubtitle = "Free models · UTC today · 20 RPM";
+            return;
+        }
+
         if (freeWindow != null)
         {
+            // Keep measured usage visible even if this account's daily entitlement cannot
+            // be proven. Without a denominator, a progress bar would be misleading.
             result.Windows.Remove(freeWindow);
-
-            string measured = usedUtcToday.HasValue
-                ? $"{usedUtcToday.Value:N0} requests UTC today"
-                : "usage measured";
-
-            result.DetailsSubtitle = confirmedPolicyCap.HasValue
-                ? $"Free models · {measured} · policy {confirmedPolicyCap.Value:N0}/day · 20 RPM"
-                : $"Free models · {measured} · 20 RPM · daily cap unknown";
+            result.DetailsSubtitle = usedUtcToday.HasValue
+                ? $"Free models · {usedUtcToday.Value:N0} requests UTC today · 20 RPM · daily cap unknown"
+                : "Free models · 20 RPM · daily cap unknown";
             return;
         }
 
