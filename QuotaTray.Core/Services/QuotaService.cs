@@ -46,7 +46,12 @@ public class QuotaService
         };
         RegisterProvider(new QuotaAccuracyGuardProvider(new CopilotQuotaProvider(copilotHttpClient)));
 
-        RegisterProvider(new QuotaAccuracyGuardProvider(new OpenRouterQuotaProvider()));
+        var openRouterHttpClient = new HttpClient(new OpenRouterAccuracyHandler())
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+        RegisterProvider(new QuotaAccuracyGuardProvider(new OpenRouterQuotaProvider(openRouterHttpClient)));
+
         RegisterProvider(new KimiQuotaProvider());
         RegisterProvider(new ZaiQuotaProvider());
         RegisterProvider(new SyntheticQuotaProvider());
