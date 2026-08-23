@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using QuotaTray.Core.Models;
@@ -28,7 +29,17 @@ public class QuotaService
     public QuotaService()
     {
         RegisterProvider(new CodexQuotaProvider());
-        RegisterProvider(new AntigravityQuotaProvider());
+
+        // Keep Antigravity credential ownership with agy. The coordinator adopts external
+        // credential changes, preserves QuotaTray's in-memory refreshed token when the stored
+        // token is stale, and only lets a real Google OAuth refresh through after a short
+        // grace period in which agy has a chance to update the shared credential itself.
+        var antigravityHttpClient = new HttpClient(new AntigravitySessionCoordinatorHandler())
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+        RegisterProvider(new AntigravityQuotaProvider(antigravityHttpClient));
+
         RegisterProvider(new ClaudeQuotaProvider());
         RegisterProvider(new CopilotQuotaProvider());
         RegisterProvider(new OpenRouterQuotaProvider());
