@@ -45,14 +45,12 @@ public class QuotaGroupViewModel : INotifyPropertyChanged
 
     public static QuotaGroupViewModel FromModel(QuotaGroup g)
     {
-        string displayGroupName = g.GroupId.Equals("codex_bengalfox", StringComparison.OrdinalIgnoreCase)
-            ? "ChatGPT Pro · Research Preview"
-            : g.GroupName;
-
         var vm = new QuotaGroupViewModel
         {
             GroupId = g.GroupId,
-            GroupName = displayGroupName,
+            // Keep the server/provider supplied group name. Do not reinterpret a metered
+            // feature ID as a specific product/plan label that may not apply to every user.
+            GroupName = g.GroupName,
             PrimaryRemainingPercent = g.PrimaryRemainingPercent,
             PrimaryRemainingPercentText = g.PrimaryRemainingPercentText
         };
