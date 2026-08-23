@@ -16,14 +16,14 @@ internal static class Program
         Console.WriteLine("No real provider credentials are used by this test.\n");
 
         await RunAsync("Antigravity synthetic 100% fallback is rejected", VerifyAntigravityFallbackRejectedAsync);
-        await RunAsync("Antigravity hard-coded model roster is removed", VerifyAntigravityModelsRemovedAsync);
+        await RunAsync("Antigravity model roster metadata is preserved", VerifyAntigravityModelsPreservedAsync);
         await RunAsync("Antigravity payload keeps only verified buckets", VerifyAntigravityPayloadSanitizerAsync);
         await RunAsync("Copilot incomplete finite quota is removed", VerifyCopilotPayloadSanitizerAsync);
         await RunAsync("Codex empty quota response is not reported as 100%", VerifyCodexEmptyRejectedAsync);
         await RunAsync("OpenRouter analytics query uses verified dimensions", VerifyOpenRouterQueryNormalizedAsync);
-        await RunAsync("OpenRouter free usage is text-only with confirmed 50/day policy", VerifyOpenRouterFreeCapAsync);
+        await RunAsync("OpenRouter free usage row keeps confirmed 50/day policy", VerifyOpenRouterFreeCapAsync);
         await RunAsync("OpenRouter unconfirmed PAYG cap is hidden", VerifyOpenRouterUnknownPaidCapAsync);
-        await RunAsync("OpenRouter $10+ credits confirms 1,000/day policy", VerifyOpenRouterConfirmedPaidCapAsync);
+        await RunAsync("OpenRouter $10+ credits restores 1,000/day usage row", VerifyOpenRouterConfirmedPaidCapAsync);
 
         Console.WriteLine();
         Console.WriteLine(_failures == 0
@@ -62,7 +62,7 @@ internal static class Program
         Expect(result.Windows.Count == 0 && result.Groups.Count == 0, "synthetic values were not cleared");
     }
 
-    private static async Task VerifyAntigravityModelsRemovedAsync()
+    private static async Task VerifyAntigravityModelsPreservedAsync()
     {
         ProviderQuotaResult fixture = Success("antigravity");
         fixture.Groups = new List<QuotaGroup>
@@ -71,7 +71,7 @@ internal static class Program
             {
                 GroupId = "gemini",
                 GroupName = "Gemini Models",
-                ModelsList = new List<string> { "hard-coded-model" },
+                ModelsList = new List<string> { "known-model" },
                 Windows = new List<QuotaWindow>
                 {
                     new()
@@ -90,7 +90,8 @@ internal static class Program
 
         ProviderQuotaResult result = await Guard("antigravity", fixture).FetchQuotaAsync();
         Expect(result.IsSuccess, "real quota should stay healthy");
-        Expect(result.Groups.Single().ModelsList.Count == 0, "hard-coded models should not be exposed");
+        Expect(result.Groups.Single().ModelsList.SequenceEqual(new[] { "known-model" }),
+            "descriptive model roster metadata should be preserved");
     }
 
     private static async Task VerifyAntigravityPayloadSanitizerAsync()
@@ -183,12 +184,13 @@ internal static class Program
     {
         ProviderQuotaResult fixture = OpenRouterResult("Free", null, 12, 50);
         ProviderQuotaResult result = await Guard("openrouter", fixture).FetchQuotaAsync();
-        Expect(result.Windows.All(window => !window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase)),
-            "measured free usage must not be rendered as a progress bar");
-        Expect(result.DetailsSubtitle.Contains("12 requests UTC today", StringComparison.Ordinal),
-            $"measured free usage missing: {result.DetailsSubtitle}");
-        Expect(result.DetailsSubtitle.Contains("policy 50/day", StringComparison.Ordinal),
-            $"confirmed free policy missing: {result.DetailsSubtitle}");
+        QuotaWindow free = result.Windows.Single(window =>
+            window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase));
+
+        Expect(free.Name.Contains("12 / 50 today", StringComparison.Ordinal), $"unexpected free row: {free.Name}");
+        Expect(Math.Abs(free.RemainingPercent - 76.0) < 0.001, $"expected 76%, got {free.RemainingPercent}");
+        Expect(free.ResetInSeconds == 0 && free.FormattedResetIn == "20 RPM",
+            "free usage row should not invent a reset countdown");
     }
 
     private static async Task VerifyOpenRouterUnknownPaidCapAsync()
@@ -207,12 +209,13 @@ internal static class Program
     {
         ProviderQuotaResult fixture = OpenRouterResult("PAYG", 10.0, 20, 1000);
         ProviderQuotaResult result = await Guard("openrouter", fixture).FetchQuotaAsync();
-        Expect(result.Windows.All(window => !window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase)),
-            "free usage progress must stay hidden even when policy cap is confirmed");
-        Expect(result.DetailsSubtitle.Contains("20 requests UTC today", StringComparison.Ordinal),
-            $"measured usage missing: {result.DetailsSubtitle}");
-        Expect(result.DetailsSubtitle.Contains("policy 1,000/day", StringComparison.Ordinal),
-            $"confirmed paid policy missing: {result.DetailsSubtitle}");
+        QuotaWindow free = result.Windows.Single(window =>
+            window.Name.StartsWith("Free models (", StringComparison.OrdinalIgnoreCase));
+
+        Expect(free.Name.Contains("20 / 1,000 today", StringComparison.Ordinal), $"unexpected paid row: {free.Name}");
+        Expect(Math.Abs(free.RemainingPercent - 98.0) < 0.001, $"expected 98%, got {free.RemainingPercent}");
+        Expect(free.ResetInSeconds == 0 && free.FormattedResetIn == "20 RPM",
+            "paid free-model row should not invent a reset countdown");
     }
 
     private static QuotaAccuracyGuardProvider Guard(string key, ProviderQuotaResult result)
