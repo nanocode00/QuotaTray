@@ -298,7 +298,9 @@ internal static class Program
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            LastUserAgent = string.Join(" ", request.Headers.UserAgent.Select(value => value.ToString()));
+            LastUserAgent = request.Headers.TryGetValues("User-Agent", out IEnumerable<string>? values)
+                ? string.Join(" ", values)
+                : string.Empty;
             LastRequestBody = request.Content == null
                 ? "{}"
                 : await request.Content.ReadAsStringAsync(cancellationToken);
